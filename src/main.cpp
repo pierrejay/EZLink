@@ -52,10 +52,22 @@ void setPWM(uint32_t freq, uint8_t duty) {
     
     // Calcul des paramètres PWM
     uint32_t timerClock = 48000000;  // 48MHz
-    uint32_t prescaler = 48;         // Division fixe pour avoir 1MHz
-    uint32_t period = (timerClock / prescaler) / freq;
+    uint32_t period = 0xFFFF;        // On vise la période max pour la meilleure résolution
+    uint32_t prescaler = (timerClock / freq / period);
     
+    // Ajuster si prescaler trop petit
+    if (prescaler < 1) {
+        prescaler = 1;
+        period = timerClock / freq;
+    }
+    
+    // Vérifier les limites
+    if (prescaler > 0xFFFF) {
+        Serial.write("DBG: Frequency too low!\n");
+        return;
+    }
     if (period > 0xFFFF) {
+        Serial.write("DBG: Period overflow!\n");
         return;
     }
     
