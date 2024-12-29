@@ -1,5 +1,9 @@
 #include <Arduino.h>
 
+// Désactiver le CRC pour le debug
+#define DISABLE_CRC
+// Ajout du build flag pour le mode binaire strict
+#define BINARY_ONLY_MODE
 
 #define LED_PIN PA4
 #define SERIAL_TX PA9 
@@ -7,6 +11,9 @@
 #define SERIAL_BAUD 115200
 #define SERIAL_TIMEOUT 10  // Timeout en millisecondes
 #define CMD_BUFFER_SIZE 32
+
+// Nombre de sorties
+#define NUM_OUTPUTS 4
 
 // Constantes PWM
 #define MIN_FREQ 1
@@ -17,7 +24,7 @@
 #define ENABLE_PIN PA3
 
 // Réduction des messages de debug et optimisation des chaînes
-#define DBG_CMD "dbg:cmd:"    // Plus court que "DBG: Got command: "
+#define DBG_CMD "dbg:cmd="    // Plus court que "DBG: Got command: "
 #define ERR_CMD "err:cmd\n" // Plus court que "error:invalid_command\n"
 #define ERR_FREQ "err:freq\n"  // Plus court que "error:invalid_frequency\n"
 #define ERR_DUTY "err:duty\n"  // Plus court que "error:invalid_duty\n"
@@ -27,6 +34,72 @@
 #define STATE_LOW 1
 #define STATE_HIGH 2
 #define STATE_PWM 3
+
+// Ajout des définitions pour le protocole binaire
+#define BINARY_MARKER 0xAA
+#define BINARY_HEADER_SIZE 3  // SOF + LEN + CMD
+#define MAX_BINARY_SIZE 32
+
+// Pins de sortie (output) du driver
+struct OutputPins {
+    uint8_t control;    // Pin de contrôle (PWM)
+    uint8_t enable;     // Pin d'activation
+};
+
+static const OutputPins DRIVER_PINS[4] = {
+    {PA3, PA2},  // DO1, DO1EN
+    {PA1, PA0},  // DO2, DO2EN
+    {PA5, PA4},  // DO3, DO3EN
+    {PA7, PA6}   // DO4, DO4EN
+};
+
+// Commandes binaires (comme dans FlexDriver)
+enum UartCommand : uint8_t {
+    SET_SINGLE_OUTPUT = 0x01,
+    SET_ALL_OUTPUTS = 0x02    // Pour plus tard
+};
+
+// Réponses binaires (comme dans FlexDriver)
+enum UartResponse : uint8_t {
+    OK = 0x00,
+    INVALID_COMMAND = 0x01,
+    INVALID_PIN = 0x02,
+    INVALID_FREQUENCY = 0x03,
+    INVALID_DUTY = 0x04,
+    CRC_ERROR = 0x06
+};
+
+// Fonction pour calculer le CRC (même algo que FlexDriver)
+uint8_t calculateCRC(const uint8_t* data, size_t len) {
+    uint8_t crc = 0;
+    for (size_t i = 0; i < len; i++) {
+        uint8_t inbyte = data[i];
+        for (uint8_t j = 0; j < 8; j++) {
+            uint8_t mix = (crc ^ inbyte) & 0x01;
+            crc >>= 1;
+            if (mix) crc ^= 0x8C;
+            inbyte >>= 1;
+        }
+    }
+    return crc;
+}
+
+// Fonction pour envoyer une réponse binaire
+void sendBinaryResponse(UartResponse response) {
+    uint8_t frame[4];  // SOF + LEN + RESPONSE + CRC
+    frame[0] = BINARY_MARKER;
+    frame[1] = sizeof(frame);
+    frame[2] = static_cast<uint8_t>(response);
+    #ifndef DISABLE_CRC
+    frame[3] = calculateCRC(frame, 3);
+    #else
+    frame[3] = 0;  // CRC nul en mode debug
+    #endif
+    
+    delay(1);  // Petit délai avant la réponse
+    Serial.write(frame, sizeof(frame));
+    Serial.flush();  // S'assurer que tout est envoyé
+}
 
 void setupPWM() {
     // Activer l'horloge du GPIOA et TIM14
@@ -183,6 +256,130 @@ void processCommand(const char* cmd) {
     Serial.write(ERR_CMD);
 }
 
+// Fonction utilitaire pour vider le buffer
+void flushReceiveBuffer() {
+    unsigned long startTime = millis();
+    
+    // On continue à vider tant qu'on reçoit des données ou jusqu'au timeout
+    while ((millis() - startTime) < SERIAL_TIMEOUT) {
+        if (Serial.available()) {
+            Serial.read();
+            startTime = millis();  // Reset du timeout si on reçoit des données
+        }
+    }
+}
+
+void processBinaryFrame() {
+    // Attendre la longueur
+    while (!Serial.available());
+    uint8_t length = Serial.read();
+    
+    // Vérifier la taille minimale AVANT de lire les données
+    if (length < 5) {  // SOF + LEN + CMD + CONTROL + CRC minimum
+        flushReceiveBuffer();  // Important !
+        sendBinaryResponse(UartResponse::INVALID_COMMAND);
+        return;
+    }
+    
+    if (length > MAX_BINARY_SIZE) {
+        flushReceiveBuffer();
+        sendBinaryResponse(UartResponse::INVALID_COMMAND);
+        return;
+    }
+    
+    // Lire les données avec timeout
+    uint8_t buffer[MAX_BINARY_SIZE];
+    uint8_t idx = 0;
+    unsigned long startTime = millis();
+    
+    while (idx < length) {
+        if (Serial.available()) {
+            buffer[idx++] = Serial.read();
+        }
+        // Timeout si on ne reçoit pas tous les octets
+        if (millis() - startTime > SERIAL_TIMEOUT) {
+            flushReceiveBuffer();
+            sendBinaryResponse(UartResponse::INVALID_COMMAND);
+            return;
+        }
+    }
+    
+    // Vérifier le CRC
+    #ifndef DISABLE_CRC
+    uint8_t receivedCRC = buffer[length-1];
+    uint8_t calculatedCRC = calculateCRC(buffer, length-1);
+    if (receivedCRC != calculatedCRC) {
+        sendBinaryResponse(UartResponse::CRC_ERROR);
+        return;
+    }
+    #endif
+
+    // Vérifier la commande
+    UartCommand cmd = static_cast<UartCommand>(buffer[0]);
+    if (cmd != SET_SINGLE_OUTPUT) {  // Pour l'instant on ne gère que SET_SINGLE_OUTPUT
+        sendBinaryResponse(UartResponse::INVALID_COMMAND);
+        return;
+    }
+
+    // Parser les données de la commande
+    uint8_t state = (buffer[1] >> 5) & 0x07;
+    uint8_t pin = (buffer[1] >> 2) & 0x07;
+    uint16_t freq = ((buffer[1] & 0x03) << 8) | buffer[2];
+    uint8_t duty = buffer[3];
+    
+    // Validation du pin
+    if (pin != 0) {
+        sendBinaryResponse(UartResponse::INVALID_PIN);
+        return;
+    }
+    
+    // Validation stricte des paramètres selon l'état
+    switch (state) {
+        case 0:  // HIGH_Z
+        case 1:  // LOW
+            if (freq != 0 || duty != 0) {
+                sendBinaryResponse(UartResponse::INVALID_COMMAND);
+                return;
+            }
+            break;
+            
+        case 2:  // HIGH
+            if (freq != 0 || duty != 100) {
+                sendBinaryResponse(UartResponse::INVALID_COMMAND);
+                return;
+            }
+            break;
+            
+        case 3:  // PWM
+            if (freq < MIN_FREQ || freq > MAX_FREQ) {
+                sendBinaryResponse(UartResponse::INVALID_FREQUENCY);
+                return;
+            }
+            if (duty > MAX_DUTY) {
+                sendBinaryResponse(UartResponse::INVALID_DUTY);
+                return;
+            }
+            break;
+            
+        default:
+            sendBinaryResponse(UartResponse::INVALID_COMMAND);
+            return;
+    }
+    
+    // Appliquer la commande
+    switch (state) {
+        case 0: setState(STATE_OFF); break;
+        case 1: setState(STATE_LOW); break;
+        case 2: setState(STATE_HIGH); break;
+        case 3: setState(STATE_PWM, freq, duty); break;
+        default:
+            sendBinaryResponse(UartResponse::INVALID_COMMAND);
+            return;
+    }
+    
+    sendBinaryResponse(UartResponse::OK);
+}
+
 void setup() {
     Serial.setRx(SERIAL_RX);
     Serial.setTx(SERIAL_TX);
@@ -202,18 +399,27 @@ void loop() {
     static uint8_t idx = 0;
     static unsigned long lastCharTime = 0;
     
-    // Vérification du timeout
-    if (idx > 0 && (millis() - lastCharTime) > SERIAL_TIMEOUT) {
-        cmd[idx] = '\0';
-        processCommand(cmd);
-        idx = 0;
-    }
-    
-    // Si on a un caractère disponible
     if (Serial.available() > 0) {
         char c = Serial.read();
-        lastCharTime = millis();
         
+        #ifdef BINARY_ONLY_MODE
+        // En mode binaire strict
+        if (c != BINARY_MARKER) {
+            flushReceiveBuffer();
+            sendBinaryResponse(UartResponse::INVALID_COMMAND);
+            return;
+        }
+        processBinaryFrame();
+        return;
+        #else
+        // Code ASCII/Binaire existant
+        if (idx == 0 && c == BINARY_MARKER) {
+            processBinaryFrame();
+            return;
+        }
+        
+        // Mode ASCII existant
+        lastCharTime = millis();
         if (c == '\n' || c == '\r') {
             if (idx > 0) {
                 cmd[idx] = '\0';
@@ -224,9 +430,19 @@ void loop() {
         else if (idx < CMD_BUFFER_SIZE-1) {
             cmd[idx] = c;
             idx++;
-            Serial.write("dbg:read:");
+            Serial.write("dbg:read=");
             Serial.write(c);
             Serial.write("\n");
         }
+        #endif
     }
+    
+    #ifndef BINARY_ONLY_MODE
+    // Vérification du timeout (uniquement pour le mode ASCII)
+    if (idx > 0 && (millis() - lastCharTime) > SERIAL_TIMEOUT) {
+        cmd[idx] = '\0';
+        processCommand(cmd);
+        idx = 0;
+    }
+    #endif
 }
