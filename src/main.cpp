@@ -1,5 +1,6 @@
 #include <Arduino.h>
 
+
 #define LED_PIN PA4
 #define SERIAL_TX PA9 
 #define SERIAL_RX PA10
@@ -11,6 +12,21 @@
 #define MIN_FREQ 1
 #define MAX_FREQ 10000
 #define MAX_DUTY 100
+
+// Ajout des définitions pour la pin d'activation
+#define ENABLE_PIN PA3
+
+// Réduction des messages de debug et optimisation des chaînes
+#define DBG_CMD "dbg:cmd:"    // Plus court que "DBG: Got command: "
+#define ERR_CMD "err:cmd\n" // Plus court que "error:invalid_command\n"
+#define ERR_FREQ "err:freq\n"  // Plus court que "error:invalid_frequency\n"
+#define ERR_DUTY "err:duty\n"  // Plus court que "error:invalid_duty\n"
+
+// Optimisation de setState en utilisant des defines pour les états
+#define STATE_OFF 0
+#define STATE_LOW 1
+#define STATE_HIGH 2
+#define STATE_PWM 3
 
 void setupPWM() {
     // Activer l'horloge du GPIOA et TIM14
@@ -61,16 +77,6 @@ void setPWM(uint32_t freq, uint8_t duty) {
         period = timerClock / freq;
     }
     
-    // Vérifier les limites
-    if (prescaler > 0xFFFF) {
-        Serial.write("DBG: Frequency too low!\n");
-        return;
-    }
-    if (period > 0xFFFF) {
-        Serial.write("DBG: Period overflow!\n");
-        return;
-    }
-    
     // Configurer le timer
     TIM14->CR1 &= ~TIM_CR1_CEN;     // Arrêter le timer
     TIM14->PSC = prescaler - 1;      // Prescaler
@@ -80,55 +86,101 @@ void setPWM(uint32_t freq, uint8_t duty) {
     TIM14->CR1 |= TIM_CR1_CEN;      // Redémarrer le timer
 }
 
-// Fonction pour traiter la commande
+// Nouvelle fonction pour gérer les états
+void setState(uint8_t state, uint32_t freq = 100, uint8_t duty = 0) {
+    // Configurer PWM avant enable pour éviter les transitions
+    switch(state) {
+        case STATE_OFF:
+            setPWM(freq, 0);
+            digitalWrite(ENABLE_PIN, HIGH);
+            break;
+        case STATE_LOW:
+            setPWM(freq, 0);
+            digitalWrite(ENABLE_PIN, LOW);
+            break;
+        case STATE_HIGH:
+            setPWM(freq, 100);
+            digitalWrite(ENABLE_PIN, LOW);
+            break;
+        case STATE_PWM:
+            setPWM(freq, duty);
+            digitalWrite(ENABLE_PIN, LOW);
+            break;
+    }
+}
+
+// Fonction utilitaire pour parser un nombre
+inline uint32_t parseNumber(const char** str) {
+    uint32_t num = 0;
+    while (**str == ' ') (*str)++; // Skip spaces
+    while (**str >= '0' && **str <= '9') {
+        num = num * 10 + (**str - '0');
+        (*str)++;
+    }
+    return num;
+}
+
 void processCommand(const char* cmd) {
-    Serial.write("DBG: Got command: ");
+    Serial.write(DBG_CMD);
     Serial.write(cmd);
-    Serial.write("\n");
+    Serial.write('\n');
     
     if (strncmp(cmd, "set 0 ", 6) == 0) {
-        if (strcmp(cmd + 6, "on") == 0) {
-            setPWM(0, 100);  // 100% = LED allumée
-            Serial.write("ok:on\n");
-        }
-        else if (strcmp(cmd + 6, "off") == 0) {
-            setPWM(0, 0);    // 0% = LED éteinte
-            Serial.write("ok:off\n");
-        }
-        else if (strncmp(cmd + 6, "pwm ", 4) == 0) {
-            char *params = (char *)(cmd + 10);
-            char *space = strchr(params, ' ');
-            if (!space) {
-                Serial.write("error:invalid_command\n");
+        const char* params = cmd + 6;
+        
+        // États simples - vérifier qu'il n'y a pas de paramètres supplémentaires
+        if (strcmp(params, "off") == 0 || 
+            strcmp(params, "low") == 0 || 
+            strcmp(params, "high") == 0) {
+            
+            // Vérifier qu'il n'y a pas de caractères après la commande
+            const char* end = params;
+            while (*end != ' ' && *end != '\0') end++;
+            if (*end != '\0') {
+                Serial.write(ERR_CMD);
                 return;
             }
-            *space = '\0';
-            int freq = atoi(params);
-            int duty = atoi(space + 1);
             
-            char debug[32];
-            snprintf(debug, sizeof(debug), "DBG: freq=%d duty=%d\n", freq, duty);
-            Serial.write(debug);
+            if (params[0] == 'o') setState(STATE_OFF);
+            else if (params[0] == 'l') setState(STATE_LOW);
+            else setState(STATE_HIGH);
+            
+            Serial.write("ok\n");
+            return;
+        }
+
+        // PWM - Format attendu: "pwm 1000 50"
+        if (strncmp(params, "pwm ", 4) == 0) {
+            params += 4;  // Skip "pwm "
+            
+            // Sauvegarder la position initiale pour vérifier qu'on a bien lu deux nombres
+            const char* start = params;
+            
+            uint32_t freq = parseNumber(&params);
+            uint32_t duty = parseNumber(&params);
+            
+            // Vérifier qu'on a bien lu deux nombres et qu'il n'y a rien après
+            while (*params == ' ') params++;  // Skip trailing spaces
+            if (params == start || *params != '\0') {
+                Serial.write(ERR_CMD);
+                return;
+            }
             
             if (freq < MIN_FREQ || freq > MAX_FREQ) {
-                Serial.write("error:invalid_frequency\n");
+                Serial.write(ERR_FREQ);
                 return;
             }
-            if (duty < 0 || duty > MAX_DUTY) {
-                Serial.write("error:invalid_duty\n");
+            if (duty > MAX_DUTY) {
+                Serial.write(ERR_DUTY);
                 return;
             }
             
-            setPWM(freq, duty);
-            Serial.write("ok:pwm\n");
-        }
-        else {
-            Serial.write("error:invalid_command\n");
+            setState(STATE_PWM, freq, duty);
+            Serial.write("ok\n");
+            return;
         }
     }
-    else {
-        Serial.write("error:invalid_command\n");
-    }
+    Serial.write(ERR_CMD);
 }
 
 void setup() {
@@ -136,9 +188,13 @@ void setup() {
     Serial.setTx(SERIAL_TX);
     Serial.begin(SERIAL_BAUD);
     
+    // Configuration de la pin d'activation
+    pinMode(ENABLE_PIN, OUTPUT);
+    digitalWrite(ENABLE_PIN, HIGH);  // OFF par défaut (logique négative)
+    
     setupPWM();
     
-    Serial.write("=== RESET ===\n");
+    Serial.write("dbg:reset\n");
 }
 
 void loop() {
@@ -168,7 +224,7 @@ void loop() {
         else if (idx < CMD_BUFFER_SIZE-1) {
             cmd[idx] = c;
             idx++;
-            Serial.write("DBG: Added char to buffer: ");
+            Serial.write("dbg:read:");
             Serial.write(c);
             Serial.write("\n");
         }
