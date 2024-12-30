@@ -7,7 +7,7 @@ SimpleComm comm(&Serial);
 void setup() {
     Serial.begin(115200);
     
-    // Enregistrer les protos (même si on ne reçoit pas)
+    // Register protos (even if we don't receive them)
     comm.registerProto<SetLedMsg>();
     comm.registerProto<SetPwmMsg>();
     comm.registerProto<GetStatusMsg>();
@@ -17,21 +17,21 @@ void setup() {
 void loop() {
     // 1. Fire and forget
     SetLedMsg ledOn{.state = 1};
-    comm.sendMsg(ledOn);  // Pas d'attente de réponse
+    comm.sendMsg(ledOn);  // No response wait
     delay(1000);
     
-    // 2. Avec ACK
+    // 2. With ACK
     SetPwmMsg pwm{.pin = 1, .freq = 1000};
-    auto result = comm.sendMsgAck(pwm);  // Attend l'écho
+    auto result = comm.sendMsgAck(pwm);  // Wait for echo
     if(result == SimpleComm::SUCCESS) {
         Serial.println("PWM set successfully");
     }
     delay(1000);
     
-    // 3. Requête/Réponse
+    // 3. Request/Response
     GetStatusMsg req{.dummy = 0};
     StatusResponseMsg resp;
-    result = comm.sendRequest(req, resp);  // Attend la réponse typée
+    result = comm.sendRequest(req, resp);  // Wait for typed response
     
     if(result == SimpleComm::SUCCESS) {
         Serial.printf("LED state: %d, uptime: %d ms\n", 
@@ -40,6 +40,6 @@ void loop() {
     
     delay(1000);
     
-    // Traiter les messages entrants (si nécessaire)
+    // Process incoming messages (if necessary)
     comm.poll();
 } 

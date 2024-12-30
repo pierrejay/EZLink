@@ -4,11 +4,11 @@
 #include <chrono>
 #include <thread>
 
-// Gestion du temps simulé
+// Simulated time management
 class TimeManager {
 private:
     static std::chrono::steady_clock::time_point startTime;
-    static uint32_t additionalTime; // Pour les avances manuelles de temps
+    static uint32_t additionalTime; // For manual time advances
 
 public:
     static void reset() {
@@ -30,7 +30,7 @@ public:
 std::chrono::steady_clock::time_point TimeManager::startTime = std::chrono::steady_clock::now();
 uint32_t TimeManager::additionalTime = 0;
 
-// Interface de base pour la communication série
+// Base interface for serial communication
 class Stream {
 protected:
     Stream() {}
@@ -46,7 +46,7 @@ public:
     virtual bool setAvailableForWrite(int value) = 0;
 };
 
-// Interface série hardware
+// Hardware serial interface
 class HardwareSerial : public Stream {
 protected:
     HardwareSerial() {}
@@ -56,12 +56,12 @@ public:
     virtual void begin(unsigned long, uint8_t) {}
 };
 
-// Fonctions Arduino basiques
+// Basic Arduino functions
 inline uint32_t millis() { return TimeManager::getMillis(); }
 inline void delay(uint32_t ms) { 
     std::this_thread::sleep_for(std::chrono::milliseconds(ms)); 
 }
 
-// Constantes Arduino
+// Arduino constants
 #define HIGH 1
 #define LOW 0 
