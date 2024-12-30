@@ -25,21 +25,24 @@ public:
         RESPONSE          // Est une réponse à une requête
     };
 
-    // Résultat d'une opération
+    // Result of an operation
     enum Status {
         SUCCESS = 0,
-        // Résultat de registerProto
-        ERR_FC_ALREADY_REGISTERED, // FC déjà enregistré
-        // Résultat de poll
+        // Poll result
         NOTHING_TO_DO,
-        // Résultats de poll & sendMsg
-        ERR_INVALID_FC,     // FC non enregistré
-        ERR_INVALID_SOF,    // SOF invalide
-        ERR_INVALID_LEN,    // Taille non valide
-        ERR_FC_MISMATCH,    // Incohérence entre taille reçue et taille attendue par le FC
-        ERR_TIMEOUT,        // Pas de réponse
-        ERR_CRC,           // CRC invalide
-        ERR_OVERFLOW,       // Buffer trop petit
+        // RegisterProto errors
+        ERR_FC_ALREADY_REGISTERED,  // FC already registered
+        ERR_NAME_ALREADY_REGISTERED, // Name already registered
+        ERR_TOO_MANY_PROTOS,       // Too many protos registered
+        ERR_INVALID_NAME,          // Name is null or empty
+        // Poll & sendMsg errors
+        ERR_INVALID_FC,     // FC not registered
+        ERR_INVALID_SOF,    // Invalid SOF
+        ERR_INVALID_LEN,    // Invalid length
+        ERR_PROTO_MISMATCH, // Inconsistency between expected and received proto
+        ERR_TIMEOUT,        // No response
+        ERR_CRC,           // Invalid CRC
+        ERR_OVERFLOW,       // Buffer too small
     };
 
     // Résultat complet d'une opération de réception
@@ -59,28 +62,46 @@ public:
         : serial(serial)
         , interbyteTimeoutMs(interbyteTimeoutMs)
         , responseTimeoutMs(responseTimeoutMs)
-    {
-        for(uint16_t i = 0; i < MAX_PROTOS; i++) {
-            protos[i].size = 0;
-            protos[i].callback = nullptr;
-        }
-    }
+    {}
 
 
     // Register message prototype
     template<typename T>
     Result registerProto() {
         static_assert(T::fc != NULL_FC, "FC=0 is reserved/invalid");
+        static_assert(T::name != nullptr, "Message must have a name");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert(T::fc < 256, "FC must be < 256");
         static_assert(sizeof(T) + FRAME_OVERHEAD <= MAX_FRAME_SIZE, "Message too large");
         
-        if(protos[T::fc].size != 0) {
-            return Error(ERR_FC_ALREADY_REGISTERED, T::fc);
+        // Les noms invalides (nullptr ou "") sont bloqués à la compilation
+        if(T::name == nullptr || T::name[0] == '\0') {
+            return Error(ERR_INVALID_NAME, T::fc);
         }
         
-        protos[T::fc].type = T::type;  // Stocke le type
-        protos[T::fc].size = sizeof(T);
+        // Vérifier si déjà enregistré (par FC ou par nom)
+        for(size_t i = 0; i < MAX_PROTOS; i++) {
+            if(protos[i].fc != NULL_FC) {
+                if(protos[i].fc == T::fc) {
+                    return Error(ERR_FC_ALREADY_REGISTERED, T::fc);
+                }
+                if(strEqual(protos[i].name, T::name)) {
+                    return Error(ERR_NAME_ALREADY_REGISTERED, T::fc);
+                }
+            }
+        }
+        
+        // Chercher un slot libre
+        ProtoStore* slot = findFreeSlot();
+        if(slot == nullptr) {
+            return Error(ERR_TOO_MANY_PROTOS, T::fc);
+        }
+        
+        // Enregistrer le proto
+        slot->fc = T::fc;
+        slot->type = T::type;
+        slot->size = sizeof(T);
+        slot->name = T::name;  // Stocker le nom
         
         return Success(T::fc);
     }
@@ -105,7 +126,7 @@ public:
         return onMessage<REQ>([this, handler](const REQ& req) {
             typename REQ::ResponseType resp;
             handler(req, resp);
-            sendMsg(resp);  // Envoi automatique de la réponse
+            sendMsgInternal(resp);  // Envoi automatique de la réponse
         });
     }
 
@@ -138,7 +159,7 @@ public:
         
         // Verify echo matches
         if (memcmp(&msg, &echo, sizeof(T)) != 0) {
-            return Error(ERR_FC_MISMATCH, T::fc);
+            return Error(ERR_PROTO_MISMATCH, T::fc);
         }
         
         return Success(T::fc);
@@ -183,44 +204,51 @@ public:
             return Error(ERR_TIMEOUT);
         }
         if(byte != START_OF_FRAME) {
-            flushRxBuffer();
+            flushRxBufferUntilSOF();
             return Error(ERR_INVALID_SOF);
         }
         
         // 2. Get length
         if(!waitByte(byte)) {
-            flushRxBuffer();
+            // If waitByte fails, the buffer is already empty
             return Error(ERR_TIMEOUT);
         }
         uint8_t frameLen = byte;
         
         // Validate frame length
         if(frameLen < FRAME_OVERHEAD || frameLen > MAX_FRAME_SIZE) {
-            flushRxBuffer();
+            flushRxBufferUntilSOF();
             return Error(ERR_INVALID_LEN);
         }
         
         // 3. Get FC
         if(!waitByte(byte)) {
-            flushRxBuffer();
+            // If waitByte fails, the buffer is already empty
             return Error(ERR_TIMEOUT);
         }
         uint8_t fc = byte;
-        
-        // Validate FC and expected message size
-        if(protos[fc].size == 0) {
-            flushRxBuffer();
+
+        // 4. Check if FC is registered
+        ProtoStore* proto = findProto(fc);
+        if(proto == nullptr) {
             return Error(ERR_INVALID_FC, fc);
         }
-        if (protos[fc].size != frameLen - FRAME_OVERHEAD) {
-            flushRxBuffer();
-            return Error(ERR_FC_MISMATCH, fc);
+        
+        // Validate FC and expected message size
+        // Note: We can't verify the message name here as we don't have the type T
+        // TODO: Add stronger proto verification with hash?
+        if(proto->size == 0) {
+            // We have already consumed the whole buffer
+            return Error(ERR_INVALID_FC, fc);
+        }
+        if (proto->size != frameLen - FRAME_OVERHEAD) {
+            // We have already consumed the whole buffer
+            return Error(ERR_PROTO_MISMATCH, fc);
         }
         
         // 4. Get data + CRC
         size_t remainingBytes = frameLen - FRAME_HEADER_SIZE - 1;
         if(!waitBytes(rxBuffer + FRAME_HEADER_SIZE + 1, remainingBytes)) {
-            flushRxBuffer();
             return Error(ERR_TIMEOUT, fc);
         }
         
@@ -230,16 +258,15 @@ public:
         rxBuffer[2] = fc;
         
         // 6. Validate CRC
-        uint8_t receivedCrc = rxBuffer[frameLen-1];
-        uint8_t calculatedCrc = calculateCrc(rxBuffer, frameLen-1);
-        if(receivedCrc != calculatedCrc) {
-            flushRxBuffer();
+        uint8_t receivedCRC = rxBuffer[frameLen-1];
+        uint8_t calculatedCRC = calculateCRC(rxBuffer, frameLen-1);
+        if(receivedCRC != calculatedCRC) {
             return Error(ERR_CRC, fc);
         }
         
         // 7. Call handler if registered
-        if(protos[fc].callback) {
-            protos[fc].callback(&rxBuffer[3]);
+        if(proto->callback) {
+            proto->callback(&rxBuffer[3]);
             return Success(fc);
         }
         
@@ -258,12 +285,38 @@ public:
         return true;
     }
 
+    // Setters pour les timeouts
+    uint32_t getInterbyteTimeout() { 
+        return interbyteTimeoutMs;
+    }
+    uint32_t getResponseTimeout() { 
+        return responseTimeoutMs;
+    }
+
+    // Fonction utilitaire pour calculer le CRC
+    static uint8_t calculateCRC(const uint8_t* data, size_t size) {
+        uint8_t crc = 0;
+        for (size_t i = 0; i < size; i++) {
+            uint8_t inbyte = data[i];
+            for (uint8_t j = 0; j < 8; j++) {
+                uint8_t mix = (crc ^ inbyte) & 0x01;
+                crc >>= 1;
+                if (mix) {
+                    crc ^= 0x8C;
+                }
+                inbyte >>= 1;
+            }
+        }
+        return crc;
+    }
 
 private:
 
     // Structure de stockage des prototypes de messages
     struct ProtoStore {
         ProtoType type = ProtoType::FIRE_AND_FORGET;
+        const char* name = nullptr;  // Ajout du nom
+        uint8_t fc = NULL_FC;  // FC du message
         size_t size = 0;
         std::function<void(const void*)> callback = nullptr;
     };
@@ -286,22 +339,32 @@ private:
     Result sendMsgInternal(const T& msg) {
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert(T::fc < 256, "FC must be < 256");
-        // Check if proto is registered
-        if(protos[T::fc].size == 0 || protos[T::fc].size != sizeof(T)) {
-            return Error(ERR_INVALID_FC);
+        static_assert(T::fc != NULL_FC, "FC must not be NULL (0)");  // Vérification à la compilation
+        
+        // Check if proto is registered and matches
+        ProtoStore* proto = findProto(T::fc);
+        if (proto == nullptr) {
+            return Error(ERR_INVALID_FC, T::fc);
+        }
+        if (!strEqual(proto->name, T::name)) {
+            return Error(ERR_PROTO_MISMATCH, T::fc);
+        }
+        
+        // Vérifier d'abord si on a assez de place
+        size_t frameSize = sizeof(T) + FRAME_OVERHEAD; // Only includes non-static fields (data) + overhead
+        if(frameSize > serial->availableForWrite()) {
+            return Error(ERR_OVERFLOW, T::fc);
         }
 
         // Prepare frame
         uint8_t frame[MAX_FRAME_SIZE];
-        size_t frameSize = sizeof(T) + FRAME_OVERHEAD;
-
         frame[0] = START_OF_FRAME;
         frame[1] = frameSize;
         frame[2] = T::fc;
         memcpy(&frame[3], &msg, sizeof(T));
-        frame[frameSize-1] = calculateCrc(frame, frameSize-1);
+        frame[frameSize-1] = calculateCRC(frame, frameSize-1);
 
-        // Send frame
+        // Send frame (maintenant on est sûr d'avoir la place)
         serial->write(frame, frameSize);
         serial->flush();
 
@@ -341,33 +404,35 @@ private:
        return true;
    }
 
-   void flushRxBuffer() {
-       uint32_t startTime = millis();
-       
-       // Continue reading until no more data or timeout
-       while(millis() - startTime < interbyteTimeoutMs) {
-           if(serial->available()) {
-               serial->read();
-               startTime = millis(); // Reset timeout on each byte read
-           }
-       }
-   }
+    // Flush le buffer de réception
+    void flushRxBuffer() {
+        uint32_t startTime = millis();
+        
+        // Continue reading until no more data or timeout
+        while(millis() - startTime < interbyteTimeoutMs) {
+            if(serial->available()) {
+                serial->read();
+                startTime = millis(); // Reset timeout on each byte read
+            }
+        }
+    }
 
-   uint8_t calculateCrc(const uint8_t* data, size_t size) {
-       uint8_t crc = 0;
-       for (size_t i = 0; i < size; i++) {
-           uint8_t inbyte = data[i];
-           for (uint8_t j = 0; j < 8; j++) {
-               uint8_t mix = (crc ^ inbyte) & 0x01;
-               crc >>= 1;
-               if (mix) {
-                   crc ^= 0x8C;
-               }
-               inbyte >>= 1;
-           }
-       }
-       return crc;
-   }
+    // Cherche le prochain START_OF_FRAME dans le buffer sans le consommer
+    bool flushRxBufferUntilSOF() {
+        uint32_t startTime = millis();
+        
+        while(millis() - startTime < interbyteTimeoutMs) {
+            if(serial->available()) {
+                if(serial->peek() == START_OF_FRAME) {
+                    return true; // SOF trouvé mais non consommé
+                }
+                serial->read(); // Consomme uniquement les bytes non-SOF
+                startTime = millis(); // Reset timeout sur chaque byte lu
+            }
+        }
+        
+        return false; // Pas de SOF trouvé mais buffer flushé
+    }
 
     // Helper for receiving specific message type
     template<typename T>
@@ -403,14 +468,44 @@ private:
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert(T::fc < 256, "FC must be < 256");
         
-        if(protos[T::fc].size == 0) {
-            return Error(ERR_INVALID_FC);
+        ProtoStore* proto = findProto(T::fc);
+        if(proto == nullptr) {
+            return Error(ERR_INVALID_FC, T::fc);
+        }
+        if (!strEqual(proto->name, T::name)) {
+            return Error(ERR_PROTO_MISMATCH, T::fc);
         }
         
-        protos[T::fc].callback = [handler](const void* data) {
+        proto->callback = [handler](const void* data) {
             handler(*static_cast<const T*>(data));
         };
         
         return Success(T::fc);
     }
+
+    // Chercher un proto par son FC
+    ProtoStore* findProto(uint8_t fc) {
+        for(size_t i = 0; i < MAX_PROTOS; i++) {
+            if(protos[i].fc == fc) {
+                return &protos[i];
+            }
+        }
+        return nullptr;
+    }
+
+    // Trouver un slot libre
+    ProtoStore* findFreeSlot() {
+        for(size_t i = 0; i < MAX_PROTOS; i++) {
+            if(protos[i].fc == NULL_FC) {
+                return &protos[i];
+            }
+        }
+        return nullptr;
+    }
+
+    // Compare 2 strings
+    static bool strEqual(const char* a, const char* b) {
+        return strcmp(a, b) == 0;
+    }
+
 };
