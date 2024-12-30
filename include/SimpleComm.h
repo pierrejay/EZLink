@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <functional>
-#include <type_traits>  // Pour is_standard_layout
+#include <type_traits>
 
 class SimpleComm {
 public:
@@ -11,123 +11,166 @@ public:
     static constexpr size_t FRAME_OVERHEAD = 4;      // SOF + LEN + FC + CRC
     static constexpr size_t MAX_FRAME_SIZE = 32;
     static constexpr uint8_t NULL_FC = 0;  // FC=0 réservé/invalide
+    static constexpr uint8_t MAX_PROTOS = 10;  // Nombre maximum de protos
     
     // Timeouts par défaut
     static constexpr uint32_t DEFAULT_INTERBYTE_TIMEOUT_MS = 10;   // 10ms entre bytes
     static constexpr uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // 500ms pour une réponse
+    
+    // Types de protocoles
+    enum class ProtoType {
+        FIRE_AND_FORGET,  // Pas de réponse attendue
+        ACK_REQUIRED,     // Echo attendu
+        REQUEST,          // Attend une réponse spécifique
+        RESPONSE          // Est une réponse à une requête
+    };
 
+    // Résultat d'une opération
     enum Status {
         SUCCESS = 0,
+        // Résultat de registerProto
+        ERR_FC_ALREADY_REGISTERED, // FC déjà enregistré
+        // Résultat de poll
         NOTHING_TO_DO,
+        // Résultats de poll & sendMsg
         ERR_INVALID_FC,     // FC non enregistré
         ERR_INVALID_SOF,    // SOF invalide
         ERR_INVALID_LEN,    // Taille non valide
         ERR_FC_MISMATCH,    // Incohérence entre taille reçue et taille attendue par le FC
         ERR_TIMEOUT,        // Pas de réponse
         ERR_CRC,           // CRC invalide
-        ERR_OVERFLOW       // Buffer trop petit
+        ERR_OVERFLOW,       // Buffer trop petit
     };
 
     // Résultat complet d'une opération de réception
-    struct CommResult {
+    struct Result {
         Status status;
         uint8_t fc;  // FC du message traité (si status == SUCCESS)
 
         // Surcharge des opérateurs pour comparaison directe avec Status
         bool operator==(Status s) const { return status == s; }
         bool operator!=(Status s) const { return status != s; }
-
-
     };
 
-    // Helpers pour créer des résultats
-    static constexpr CommResult Error(Status status, uint8_t fc = NULL_FC) {
-        return CommResult{status, fc};
+    // Constructor
+    explicit SimpleComm(HardwareSerial* serial, 
+                        uint32_t interbyteTimeoutMs = DEFAULT_INTERBYTE_TIMEOUT_MS,
+                        uint32_t responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS) 
+        : serial(serial)
+        , interbyteTimeoutMs(interbyteTimeoutMs)
+        , responseTimeoutMs(responseTimeoutMs)
+    {
+        for(uint16_t i = 0; i < MAX_PROTOS; i++) {
+            protos[i].size = 0;
+            protos[i].callback = nullptr;
+        }
     }
-    
-    static constexpr CommResult Success(uint8_t fc) {
-        return CommResult{SUCCESS, fc};
+
+
+    // Register message prototype
+    template<typename T>
+    Result registerProto() {
+        static_assert(T::fc != NULL_FC, "FC=0 is reserved/invalid");
+        static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
+        static_assert(T::fc < 256, "FC must be < 256");
+        static_assert(sizeof(T) + FRAME_OVERHEAD <= MAX_FRAME_SIZE, "Message too large");
+        
+        if(protos[T::fc].size != 0) {
+            return Error(ERR_FC_ALREADY_REGISTERED, T::fc);
+        }
+        
+        protos[T::fc].type = T::type;  // Stocke le type
+        protos[T::fc].size = sizeof(T);
+        
+        return Success(T::fc);
     }
-    
-    static constexpr CommResult NoData() {
-        return CommResult{NOTHING_TO_DO, NULL_FC};
+
+    // Handler pour messages FIRE_AND_FORGET et ACK_REQUIRED
+    template<typename T>
+    Result onReceive(std::function<void(const T&)> handler) {
+        static_assert(T::type == ProtoType::FIRE_AND_FORGET || 
+                     T::type == ProtoType::ACK_REQUIRED,
+                     "onReceive only works with FIRE_AND_FORGET or ACK_REQUIRED messages");
+        return onMessage<T>(handler);
     }
 
-   // Constructor
-   explicit SimpleComm(HardwareSerial* serial, 
-                      uint32_t interbyteTimeoutMs = DEFAULT_INTERBYTE_TIMEOUT_MS,
-                      uint32_t responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS) 
-       : serial(serial)
-       , interbyteTimeoutMs(interbyteTimeoutMs)
-       , responseTimeoutMs(responseTimeoutMs)
-   {
-       for(uint16_t i = 0; i < 256; i++) {
-           protos[i].size = 0;
-           protos[i].callback = nullptr;
-       }
-   }
+    // Handler pour messages REQUEST avec réponse automatique
+    template<typename REQ>
+    Result onRequest(std::function<void(const REQ&, typename REQ::ResponseType&)> handler) {
+        static_assert(REQ::type == ProtoType::REQUEST, 
+                     "onRequest only works with REQUEST messages");
+        static_assert(REQ::ResponseType::type == ProtoType::RESPONSE, 
+                     "Response type must be RESPONSE");
+        
+        return onMessage<REQ>([this, handler](const REQ& req) {
+            typename REQ::ResponseType resp;
+            handler(req, resp);
+            sendMsg(resp);  // Envoi automatique de la réponse
+        });
+    }
 
-   // Register message prototype
-   template<typename T>
-   CommResult registerProto() {
-       static_assert(T::fc != NULL_FC, "FC=0 is reserved/invalid");
-       static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-       static_assert(T::fc < 256, "FC must be < 256");
-       // Validate message size
-       if(sizeof(T) + FRAME_OVERHEAD > MAX_FRAME_SIZE) {
-           return ERR_OVERFLOW;
-       }
-       protos[T::fc].size = sizeof(T);
-       return Success(T::fc);
-   }
+    // Type-safe send for FIRE_AND_FORGET messages
+    template<typename T>
+    Result sendMsg(const T& msg) {
+        static_assert(T::type == ProtoType::FIRE_AND_FORGET, "Wrong message type");
+        return sendMsgInternal(msg);
+    }
 
-   // Register message handler
-   template<typename T>
-   CommResult onMessage(std::function<void(const T&)> handler) {
-       static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-       static_assert(T::fc < 256, "FC must be < 256");
-       // Verify that proto is registered
-       if(protos[T::fc].size == 0) {
-           return Error(ERR_INVALID_FC);
-       }
-       
-       // Wrap typed handler into void* handler
-       protos[T::fc].callback = [handler](const void* data) {
-           handler(*static_cast<const T*>(data));
-       };
-       
-       return Success(T::fc);
-   }
+    // Send message and wait for acknowledgement (same message echoed back)
+    template<typename T>
+    Result sendMsgAck(const T& msg) {
+        static_assert(T::type == ProtoType::ACK_REQUIRED, "Wrong message type");
+        static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
+        static_assert(T::fc < 256, "FC must be < 256");
+        
+        // Send message first
+        Result result = sendMsgInternal(msg);
+        if (result != SUCCESS) {
+            return Error(result.status, T::fc);
+        }
+        
+        // Wait for echo
+        T echo;
+        Result rcvResult = receiveMsg(echo, T::fc, true);
+        if (rcvResult != SUCCESS) {
+            return Error(rcvResult.status, T::fc);
+        }
+        
+        // Verify echo matches
+        if (memcmp(&msg, &echo, sizeof(T)) != 0) {
+            return Error(ERR_FC_MISMATCH, T::fc);
+        }
+        
+        return Success(T::fc);
+    }
 
-   // Send message
-   template<typename T>
-   CommResult sendMsg(const T& msg) {
-       static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-       static_assert(T::fc < 256, "FC must be < 256");
-       // Check if proto is registered
-       if(protos[T::fc].size == 0 || protos[T::fc].size != sizeof(T)) {
-           return Error(ERR_INVALID_FC);
-       }
-
-       // Prepare frame
-       uint8_t frame[MAX_FRAME_SIZE];
-       size_t frameSize = sizeof(T) + FRAME_OVERHEAD;
-
-       frame[0] = START_OF_FRAME;
-       frame[1] = frameSize;
-       frame[2] = T::fc;
-       memcpy(&frame[3], &msg, sizeof(T));
-       frame[frameSize-1] = calculateCrc(frame, frameSize-1);
-
-       // Send frame
-       serial->write(frame, frameSize);
-       serial->flush();
-
-       return Success(T::fc);
-   }
+    // Send request and wait for specific response type
+    template<typename REQ, typename RESP>
+    Result sendRequest(const REQ& req, RESP& resp) {
+        static_assert(REQ::type == ProtoType::REQUEST, "Wrong message type");
+        static_assert(RESP::type == ProtoType::RESPONSE, "Response must be a RESPONSE type");
+        static_assert(std::is_standard_layout<REQ>::value, "Request type must be POD/standard-layout");
+        static_assert(std::is_standard_layout<RESP>::value, "Response type must be POD/standard-layout");
+        static_assert(std::is_same<RESP, typename REQ::ResponseType>::value, "Response type doesn't match request's ResponseType");
+        static_assert(REQ::fc < 256 && RESP::fc < 256, "FC must be < 256");
+        
+        // Send request
+        Result result = sendMsgInternal(req);
+        if (result != SUCCESS) {
+            return Error(result.status, REQ::fc);
+        }
+        
+        // Wait for response
+        Result rcvResult = receiveMsg(resp, RESP::fc, true);
+        if (rcvResult != SUCCESS) {
+            return Error(rcvResult.status, RESP::fc);
+        }
+        
+        return Success(RESP::fc);
+    }
 
     // Process received messages
-    CommResult processRx() {
+    Result poll() {
         uint8_t byte;
         
         // Check if there's data available
@@ -203,55 +246,6 @@ public:
         return Success(fc);  // Message valide même sans handler
     }
 
-    // Send message and wait for acknowledgement (same message echoed back)
-    template<typename T>
-    CommResult sendMsgAck(const T& msg) {
-        static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert(T::fc < 256, "FC must be < 256");
-        
-        // Send message first
-        CommResult result = sendMsg(msg);
-        if (result != SUCCESS) {
-            return Error(result.status, T::fc);
-        }
-        
-        // Wait for echo
-        T echo;
-        CommResult rcvResult = receiveMsg(echo, T::fc, true);
-        if (rcvResult != SUCCESS) {
-            return Error(rcvResult.status, T::fc);
-        }
-        
-        // Verify echo matches
-        if (memcmp(&msg, &echo, sizeof(T)) != 0) {
-            return Error(ERR_FC_MISMATCH, T::fc);
-        }
-        
-        return Success(T::fc);
-    }
-
-    // Send request and wait for specific response type
-    template<typename REQ, typename RESP>
-    CommResult sendRequest(const REQ& req, RESP& resp) {
-        static_assert(std::is_standard_layout<REQ>::value, "Request type must be POD/standard-layout");
-        static_assert(std::is_standard_layout<RESP>::value, "Response type must be POD/standard-layout");
-        static_assert(REQ::fc < 256 && RESP::fc < 256, "FC must be < 256");
-        
-        // Send request
-        CommResult result = sendMsg(req);
-        if (result != SUCCESS) {
-            return Error(result.status, REQ::fc);
-        }
-        
-        // Wait for response
-        CommResult rcvResult = receiveMsg(resp, RESP::fc, true);
-        if (rcvResult != SUCCESS) {
-            return Error(rcvResult.status, RESP::fc);
-        }
-        
-        return Success(RESP::fc);
-    }
-
     // Setters pour les timeouts
     bool setInterbyteTimeout(uint32_t ms) { 
         if(ms == 0) return false;
@@ -266,8 +260,10 @@ public:
 
 
 private:
+
     // Structure de stockage des prototypes de messages
     struct ProtoStore {
+        ProtoType type = ProtoType::FIRE_AND_FORGET;
         size_t size = 0;
         std::function<void(const void*)> callback = nullptr;
     };
@@ -276,8 +272,41 @@ private:
     HardwareSerial* serial;
     uint32_t interbyteTimeoutMs;  // Timeout entre bytes d'une même frame
     uint32_t responseTimeoutMs;   // Timeout pour attendre une réponse
-    ProtoStore protos[256];  // Indexé par FC
+    ProtoStore protos[MAX_PROTOS];  // Indexé par FC
     uint8_t rxBuffer[MAX_FRAME_SIZE];
+
+
+    // Helpers pour créer des résultats
+    static constexpr Result Error(Status status, uint8_t fc = NULL_FC) { return Result{status, fc}; }
+    static constexpr Result Success(uint8_t fc) { return Result{SUCCESS, fc}; }
+    static constexpr Result NoData() { return Result{NOTHING_TO_DO, NULL_FC}; }
+
+// Send message
+    template<typename T>
+    Result sendMsgInternal(const T& msg) {
+        static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
+        static_assert(T::fc < 256, "FC must be < 256");
+        // Check if proto is registered
+        if(protos[T::fc].size == 0 || protos[T::fc].size != sizeof(T)) {
+            return Error(ERR_INVALID_FC);
+        }
+
+        // Prepare frame
+        uint8_t frame[MAX_FRAME_SIZE];
+        size_t frameSize = sizeof(T) + FRAME_OVERHEAD;
+
+        frame[0] = START_OF_FRAME;
+        frame[1] = frameSize;
+        frame[2] = T::fc;
+        memcpy(&frame[3], &msg, sizeof(T));
+        frame[frameSize-1] = calculateCrc(frame, frameSize-1);
+
+        // Send frame
+        serial->write(frame, frameSize);
+        serial->flush();
+
+        return Success(T::fc);
+    }
 
    // Reception methods
    bool waitByte(uint8_t& byte) {
@@ -342,11 +371,11 @@ private:
 
     // Helper for receiving specific message type
     template<typename T>
-    CommResult receiveMsg(T& msg, uint8_t expectedFc, bool checkFc = false) {
+    Result receiveMsg(T& msg, uint8_t expectedFc, bool checkFc = false) {
         uint32_t startTime = millis();
         
         while (millis() - startTime < responseTimeoutMs) {  // Timeout long
-            CommResult result = processRx();  // Utilise timeout court en interne
+            Result result = poll();  // Utilise timeout court en interne
             
             if (result == NOTHING_TO_DO) {
                 continue;
@@ -366,5 +395,22 @@ private:
         }
         
         return Error(ERR_TIMEOUT);
+    }
+
+    // Handler générique (usage interne uniquement)
+    template<typename T>
+    Result onMessage(std::function<void(const T&)> handler) {
+        static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
+        static_assert(T::fc < 256, "FC must be < 256");
+        
+        if(protos[T::fc].size == 0) {
+            return Error(ERR_INVALID_FC);
+        }
+        
+        protos[T::fc].callback = [handler](const void* data) {
+            handler(*static_cast<const T*>(data));
+        };
+        
+        return Success(T::fc);
     }
 };

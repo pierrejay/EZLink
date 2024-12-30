@@ -24,7 +24,7 @@ void loop() {
     SetPwmMsg pwm{.pin = 1, .freq = 1000};
     auto result = comm.sendMsgAck(pwm);  // Attend l'écho
     if(result == SimpleComm::SUCCESS) {
-        Serial.write("ok\n");
+        Serial.println("PWM set successfully");
     }
     delay(1000);
     
@@ -34,7 +34,8 @@ void loop() {
     result = comm.sendRequest(req, resp);  // Attend la réponse typée
     
     if(result == SimpleComm::SUCCESS) {
-        Serial.write("ok\n");
+        Serial.printf("LED state: %d, uptime: %d ms\n", 
+            resp.state, resp.uptime);
     }
     
     delay(1000);
