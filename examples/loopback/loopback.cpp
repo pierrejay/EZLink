@@ -1,68 +1,17 @@
-#define ESP32
-
-#if defined(STM32)
-
-#include <Arduino.h>
-#include "SimpleComm.h"
-#include "SimpleComm_Proto.h"
-
-SimpleComm comm(&Serial);
-
-void setup() {
-    Serial.begin(115200);
-    
-    // Register protos (even if we don't receive them)
-    comm.registerProto<SetLedMsg>();
-    comm.registerProto<SetPwmMsg>();
-    comm.registerProto<GetStatusMsg>();
-    comm.registerProto<StatusResponseMsg>();
-}
-
-void loop() {
-    // 1. Fire and forget
-    SetLedMsg ledOn{.state = 1};
-    comm.sendMsg(ledOn);  // No response wait
-    delay(1000);
-    
-    // 2. With ACK
-    SetPwmMsg pwm{.pin = 1, .freq = 1000};
-    auto result = comm.sendMsgAck(pwm);  // Wait for echo
-    if(result == SimpleComm::SUCCESS) {
-        Serial.write("ok\n");
-    }
-    delay(1000);
-    
-    // 3. Request/Response
-    GetStatusMsg req{.dummy = 0};
-    StatusResponseMsg resp;
-    result = comm.sendRequest(req, resp);  // Wait for typed response
-    
-    if(result == SimpleComm::SUCCESS) {
-        Serial.write("ok\n");
-    }
-    
-    delay(1000);
-    
-    // Process incoming messages (if necessary)
-    comm.poll();
-} 
-
-#elif defined(ESP32)
-
 #include <Arduino.h>
 #include "SimpleComm.h"
 #include "SimpleComm_Proto.h"
 
 // Communication pins
-#define UART1_RX 16
-#define UART1_TX 17
-#define UART2_RX 18
-#define UART2_TX 19
+#define UART1_RX D4
+#define UART1_TX D5
+#define UART2_RX D8
+#define UART2_TX D9
 
 // Serial ports
+#define USB Serial
 #define UART1 Serial1
 #define UART2 Serial2
-#define USB Serial
 
 // Task configuration
 #define MASTER_DELAY_US 1000  // 1ms between messages
@@ -112,10 +61,9 @@ struct Stats {
 SimpleComm master(&UART1);
 SimpleComm slave(&UART2);
 
-// Task configuration (in ticks, assuming configTICK_RATE_HZ = 100)
-#define TICK_PERIOD_MS (1000/configTICK_RATE_HZ)
-#define MASTER_DELAY_TICKS (MASTER_DELAY_US/TICK_PERIOD_MS)
-#define SLAVE_DELAY_TICKS  (SLAVE_DELAY_US/TICK_PERIOD_MS)
+// Task configuration (in ticks, assuming configTICK_RATE_HZ = 1000)
+#define MASTER_DELAY_TICKS (MASTER_DELAY_US/1000)  // Convert µs to ms
+#define SLAVE_DELAY_TICKS  (SLAVE_DELAY_US/1000)   // Convert µs to ms
 
 // Master task running on core 0
 void masterTask(void* parameter) {
@@ -246,5 +194,3 @@ void loop() {
     // Main loop does nothing, everything happens in tasks
     vTaskDelete(NULL);
 } 
-
-#endif

@@ -42,19 +42,19 @@ struct SetPwmMsg {
     uint32_t freq;  // Frequency in Hz
 } __attribute__((packed));
 
-// Message REQUEST : status request
-struct GetStatusMsg {
-    static constexpr ProtoType type = ProtoType::REQUEST;
-    static constexpr const char* name = "GET_STATUS";
-    static constexpr uint8_t fc = 3;
-    using ResponseType = StatusResponseMsg;  // Expected response type
-} __attribute__((packed));
-
 // Message RESPONSE : status response
 struct StatusResponseMsg {
     static constexpr ProtoType type = ProtoType::RESPONSE;
-    static constexpr const char* name = "STATUS_RESP";
+    static constexpr const char* name = "RSP_STA";
     static constexpr uint8_t fc = 4;
     uint8_t state;    // Global state
     uint32_t uptime;  // Uptime since startup
+} __attribute__((packed));
+
+// Message REQUEST : status request
+struct GetStatusMsg {
+    static constexpr ProtoType type = ProtoType::REQUEST;
+    static constexpr const char* name = "REQ_STA";
+    static constexpr uint8_t fc = 3;
+    using ResponseType = StatusResponseMsg;  // Expected response type
 } __attribute__((packed));

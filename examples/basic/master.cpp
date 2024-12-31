@@ -2,7 +2,7 @@
 #include "SimpleComm.h"
 #include "SimpleComm_Proto.h"
 
-SimpleComm comm(&Serial);
+SimpleComm comm(&Serial1);
 
 void setup() {
     Serial.begin(115200);
@@ -29,7 +29,7 @@ void loop() {
     delay(1000);
     
     // 3. Request/Response
-    GetStatusMsg req{.dummy = 0};
+    GetStatusMsg req{};
     StatusResponseMsg resp;
     result = comm.sendRequest(req, resp);  // Wait for typed response
     

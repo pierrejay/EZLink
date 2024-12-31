@@ -2,7 +2,7 @@
 #include "SimpleComm.h"
 #include "SimpleComm_Proto.h"
 
-SimpleComm comm(&Serial);
+SimpleComm comm(&Serial1);
 
 void setup() {
     Serial.begin(115200);

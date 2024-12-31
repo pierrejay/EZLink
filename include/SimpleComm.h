@@ -3,19 +3,26 @@
 #include <functional>
 #include <type_traits>
 
+// TODO FOR NEXT VERSIONS:
+// Add support for custom communication layer (UART, SPI, ... => simple byte input/output ?)
+// Decouple processing messages from the communication layer (queue + custom buffers or handlers ?)  
+// Support validation of the full message structure (hash ?)
+// Add more CRC options
+
 class SimpleComm {
 public:
-    // Protocol constants
+    // Buffer/frame size
+    static constexpr size_t MAX_FRAME_SIZE = 32;
+    // Frame format
     static constexpr uint8_t START_OF_FRAME = 0xAA;
     static constexpr uint8_t FRAME_HEADER_SIZE = 2;  // SOF + LEN
     static constexpr size_t FRAME_OVERHEAD = 4;      // SOF + LEN + FC + CRC
-    static constexpr size_t MAX_FRAME_SIZE = 32;
+    // FC constants
     static constexpr uint8_t NULL_FC = 0;  // FC=0 reserved/invalid
     static constexpr uint8_t MAX_PROTOS = 10;  // Maximum number of protos
-    
     // Default timeouts
-    static constexpr uint32_t DEFAULT_INTERBYTE_TIMEOUT_MS = 10;   // 10ms between bytes
-    static constexpr uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // 500ms for a response
+    static constexpr uint32_t DEFAULT_INTERBYTE_TIMEOUT_MS = 10;   // Wait max 10ms between bytes within a frame
+    static constexpr uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // Wait max 500ms for a response
     
     // Proto types
     enum class ProtoType {

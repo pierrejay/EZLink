@@ -8,9 +8,10 @@ SimpleComm is designed to provide a robust and efficient communication layer bet
 
 ### Key Features
 
+- User-friendly API & protocol definition
 - Type-safe message definitions using C++ templates
 - Zero-copy message handling
-- Minimal memory footprint (~1KB Flash for 4 messages)
+- Minimal memory footprint (<1KB Flash typically)
 - Runtime protocol validation (CRC, message size)
 - Support for different communication patterns:
   - Fire and forget messages
