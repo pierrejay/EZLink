@@ -21,7 +21,6 @@ public:
     static constexpr uint8_t NULL_FC = 0;  // FC=0 reserved/invalid
     static constexpr uint8_t MAX_PROTOS = 10;  // Maximum number of protos
     // Default timeouts
-    static constexpr uint32_t DEFAULT_INTERBYTE_TIMEOUT_MS = 10;   // Wait max 10ms between bytes within a frame
     static constexpr uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // Wait max 500ms for a response
     
     // Proto types
@@ -64,10 +63,8 @@ public:
 
     // Constructor
     explicit SimpleComm(HardwareSerial* serial, 
-                        uint32_t interbyteTimeoutMs = DEFAULT_INTERBYTE_TIMEOUT_MS,
-                        uint32_t responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS) 
+                       uint32_t responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS) 
         : serial(serial)
-        , interbyteTimeoutMs(interbyteTimeoutMs)
         , responseTimeoutMs(responseTimeoutMs)
     {}
 
@@ -157,19 +154,31 @@ public:
             return Error(result.status, T::fc);
         }
         
-        // Wait for echo
+        // Wait for echo with timeout
+        uint8_t frame[MAX_FRAME_SIZE];
+        size_t frameLen;
         T echo;
-        Result rcvResult = receiveMsg(echo, T::fc, true);
-        if (rcvResult != SUCCESS) {
-            return Error(rcvResult.status, T::fc);
+        
+        unsigned long startTime = millis();
+        while(millis() - startTime < responseTimeoutMs) {
+            result = captureFrame(T::fc, frame, &frameLen);
+            if(result == NOTHING_TO_DO) {
+                continue;
+            }
+            if(result != SUCCESS) {
+                return result;
+            }
+            
+            // Frame capturée, on vérifie qu'elle correspond
+            memcpy(&echo, &frame[3], sizeof(T));
+            if(memcmp(&msg, &echo, sizeof(T)) != 0) {
+                return Error(ERR_PROTO_MISMATCH, T::fc);
+            }
+            
+            return Success(T::fc);
         }
         
-        // Verify echo matches
-        if (memcmp(&msg, &echo, sizeof(T)) != 0) {
-            return Error(ERR_PROTO_MISMATCH, T::fc);
-        }
-        
-        return Success(T::fc);
+        return Error(ERR_TIMEOUT);
     }
 
     // Send request and wait for specific response type
@@ -188,113 +197,58 @@ public:
             return Error(result.status, REQ::fc);
         }
         
-        // Wait for response
-        Result rcvResult = receiveMsg(resp, RESP::fc, true);
-        if (rcvResult != SUCCESS) {
-            return Error(rcvResult.status, RESP::fc);
+        // Wait for response with timeout
+        uint8_t frame[MAX_FRAME_SIZE];
+        size_t frameLen;
+        
+        unsigned long startTime = millis();
+        while(millis() - startTime < responseTimeoutMs) {
+            result = captureFrame(RESP::fc, frame, &frameLen);
+            if(result == NOTHING_TO_DO) {
+                continue;
+            }
+            if(result != SUCCESS) {
+                return result;
+            }
+            
+            // Frame capturée, on la copie dans la réponse
+            memcpy(&resp, &frame[3], sizeof(RESP));
+            return Success(RESP::fc);
         }
         
-        return Success(RESP::fc);
+        return Error(ERR_TIMEOUT);
     }
 
     // Process received messages
     Result poll() {
-        uint8_t byte;
+        // Tente de capturer une frame
+        Result result = captureFrame();
         
-        // Check if there's data available
-        if(!serial->available()) {
-            return NoData();
-        }
-        
-        // Wait for START_OF_FRAME
-        if(!waitByte(byte)) {
-            return Error(ERR_TIMEOUT);
-        }
-        if(byte != START_OF_FRAME) {
+        // Si la capture n'a pas réussi, on vide le buffer
+        if(result != SUCCESS && result != NOTHING_TO_DO) {
             flushRxBufferUntilSOF();
-            return Error(ERR_INVALID_SOF);
+            return result;
         }
         
-        // Get length
-        if(!waitByte(byte)) {
-            // If waitByte fails, the buffer is already empty
-            return Error(ERR_TIMEOUT);
-        }
-        uint8_t frameLen = byte;
-        
-        // Validate frame length
-        if(frameLen < FRAME_OVERHEAD || frameLen > MAX_FRAME_SIZE) {
-            flushRxBufferUntilSOF();
-            return Error(ERR_INVALID_LEN);
+        // Si la capture a réussi, on appelle le handler
+        if(result == SUCCESS) {
+            // Appeler le handler si enregistré
+            ProtoStore* proto = findProto(result.fc);
+            if(proto && proto->callback) {
+                proto->callback(&rxBuffer[3]);
+            }
+            return result;
         }
         
-        // Get FC
-        if(!waitByte(byte)) {
-            // If waitByte fails, the buffer is already empty
-            return Error(ERR_TIMEOUT);
-        }
-        uint8_t fc = byte;
-
-        // Check if FC is registered
-        ProtoStore* proto = findProto(fc);
-        if(proto == nullptr) {
-            return Error(ERR_INVALID_FC, fc);
-        }
-        
-        // Validate FC and expected message size
-        // Note: We can't verify the message name here as we don't have the type T
-        // TODO: Add stronger proto verification with hash?
-        if(proto->size == 0) {
-            // We have already consumed the whole buffer
-            return Error(ERR_INVALID_FC, fc);
-        }
-        if (proto->size != frameLen - FRAME_OVERHEAD) {
-            // We have already consumed the whole buffer
-            return Error(ERR_PROTO_MISMATCH, fc);
-        }
-        
-        // Get data + CRC
-        size_t remainingBytes = frameLen - FRAME_HEADER_SIZE - 1;
-        if(!waitBytes(rxBuffer + FRAME_HEADER_SIZE + 1, remainingBytes)) {
-            return Error(ERR_TIMEOUT, fc);
-        }
-        
-        // Reconstruct full frame for CRC check
-        rxBuffer[0] = START_OF_FRAME;
-        rxBuffer[1] = frameLen;
-        rxBuffer[2] = fc;
-        
-        // Validate CRC
-        uint8_t receivedCRC = rxBuffer[frameLen-1];
-        uint8_t calculatedCRC = calculateCRC(rxBuffer, frameLen-1);
-        if(receivedCRC != calculatedCRC) {
-            return Error(ERR_CRC, fc);
-        }
-        
-        // Call handler if registered
-        if(proto->callback) {
-            proto->callback(&rxBuffer[3]);
-            return Success(fc);
-        }
-        
-        return Success(fc);  // Valid message even without handler
+        // Si on n'a rien capturé, on retourne NOTHING_TO_DO
+        return NoData();
     }
 
-    // Setters for timeouts
-    bool setInterbyteTimeout(uint32_t ms) { 
-        if(ms == 0) return false;
-        interbyteTimeoutMs = ms; 
-        return true;
-    }
+    // Setter for timeouts
     bool setResponseTimeout(uint32_t ms) { 
         if(ms == 0) return false;
         responseTimeoutMs = ms; 
         return true;
-    }
-
-    // Getters for timeouts
-    uint32_t getInterbyteTimeout() { 
-        return interbyteTimeoutMs;
     }
     uint32_t getResponseTimeout() { 
         return responseTimeoutMs;
@@ -330,10 +284,10 @@ private:
 
     // Attributes
     HardwareSerial* serial;
-    uint32_t interbyteTimeoutMs;  // Timeout between bytes of the same frame
     uint32_t responseTimeoutMs;   // Timeout for waiting for a response
     ProtoStore protos[MAX_PROTOS];  // Indexed by FC
     uint8_t rxBuffer[MAX_FRAME_SIZE];
+    bool gotSOF = false;  // État de la capture de frame
 
 
     // Helpers to create results
@@ -378,94 +332,117 @@ private:
         return Success(T::fc);
     }
 
-   // Reception methods
-   bool waitByte(uint8_t& byte) {
-       uint32_t startTime = millis();
-       
-       while(!serial->available()) {
-           if(millis() - startTime > interbyteTimeoutMs) {
-               return false;
-           }
-       }
-       
-       byte = serial->read();
-       return true;
-   }
-
-   bool waitBytes(uint8_t* buffer, size_t size) {
-       uint32_t startTime = millis();
-       size_t bytesRead = 0;
-       
-       while(bytesRead < size) {
-           if(millis() - startTime > interbyteTimeoutMs) {
-               return false;
-           }
-           
-           if(serial->available()) {
-               buffer[bytesRead] = serial->read();
-               bytesRead++;
-               startTime = millis(); // Reset timeout on each byte received
-           }
-       }
-       
-       return true;
-   }
-
-    // Flush the reception buffer
-    void flushRxBuffer() {
-        uint32_t startTime = millis();
-        
-        // Continue reading until no more data or timeout
-        while(millis() - startTime < interbyteTimeoutMs) {
-            if(serial->available()) {
-                serial->read();
-                startTime = millis(); // Reset timeout on each byte read
+    // Flush RX buffer until SOF is found
+    void flushRxBufferUntilSOF() {
+        while(serial->available()) {
+            if(serial->peek() == START_OF_FRAME) {
+                return; // SOF trouvé mais pas consommé
             }
+            serial->read(); // Consomme uniquement les octets non-SOF
         }
     }
 
-    // Find the next START_OF_FRAME in the buffer without consuming it
-    bool flushRxBufferUntilSOF() {
-        uint32_t startTime = millis();
-        
-        while(millis() - startTime < interbyteTimeoutMs) {
-            if(serial->available()) {
-                if(serial->peek() == START_OF_FRAME) {
-                    return true; // SOF found but not consumed
-                }
-                serial->read(); // Consume only non-SOF bytes
-                startTime = millis(); // Reset timeout on each byte read
+    // Nouvelle fonction de capture de frame
+    Result captureFrame(uint8_t expectedFc = 0, uint8_t* outFrame = nullptr, size_t* outLen = nullptr) {
+        // Si pas de SOF, chercher le prochain
+        if(!gotSOF) {
+            if(!serial->available()) {
+                return NoData();
+            }
+            
+            uint8_t byte = serial->read();
+            if(byte != START_OF_FRAME) {
+                return Error(ERR_INVALID_SOF);
+            }
+            gotSOF = true;
+        }
+
+        // À ce stade on a un SOF valide
+        if(serial->available() < 1) {
+            return NoData(); // Pas assez de données pour LEN
+        }
+
+        // Vérifier LEN sans le consommer
+        uint8_t frameSize = serial->peek();
+        if(frameSize < FRAME_OVERHEAD) {
+            serial->read(); // Consommer LEN invalide
+            gotSOF = false;
+            return Error(ERR_INVALID_LEN);
+        }
+
+        // Attendre d'avoir assez de données
+        if(serial->available() < frameSize - 1) { // -1 car SOF déjà consommé
+            return NoData();
+        }
+
+        // Capturer la frame complète
+        uint8_t tempFrame[MAX_FRAME_SIZE];
+        tempFrame[0] = START_OF_FRAME;
+        tempFrame[1] = serial->read(); // LEN
+
+        for(size_t i = 2; i < frameSize; i++) {
+            if(serial->peek() == START_OF_FRAME && i < frameSize-1) {
+                gotSOF = false;
+                return Error(ERR_INVALID_LEN); // Frame tronquée
+            }
+            tempFrame[i] = serial->read();
+        }
+
+        // Valider FC
+        uint8_t fc = tempFrame[2];
+        if(expectedFc > 0 && fc != expectedFc) {
+            gotSOF = false;
+            return Error(ERR_INVALID_FC, fc);
+        }
+
+        // Valider taille proto si FC attendu
+        if(expectedFc > 0) {
+            ProtoStore* proto = findProto(fc);
+            if(!proto || proto->size != frameSize - FRAME_OVERHEAD) {
+                gotSOF = false;
+                return Error(ERR_PROTO_MISMATCH, fc);
             }
         }
-        
-        return false; // No SOF found but buffer flushed
+
+        // Valider CRC
+        uint8_t receivedCRC = tempFrame[frameSize-1];
+        uint8_t calculatedCRC = calculateCRC(tempFrame, frameSize-1);
+        if(receivedCRC != calculatedCRC) {
+            gotSOF = false;
+            return Error(ERR_CRC, fc);
+        }
+
+        // Copier frame si demandé
+        if(outFrame && outLen) {
+            memcpy(outFrame, tempFrame, frameSize);
+            *outLen = frameSize;
+        }
+
+        gotSOF = false;
+        return Success(fc);
     }
 
     // Helper for receiving specific message type
     template<typename T>
     Result receiveMsg(T& msg, uint8_t expectedFc, bool checkFc = false) {
-        uint32_t startTime = millis();
+        uint8_t frame[MAX_FRAME_SIZE];
+        size_t frameLen;
         
-        while (millis() - startTime < responseTimeoutMs) {  // Long timeout
-            Result result = poll();  // Use short timeout internally
-            
-            if (result == NOTHING_TO_DO) {
+        // On tente de capturer la frame directement suivante jusqu'au timeout
+        unsigned long startTime = millis();
+        while(millis() - startTime < responseTimeoutMs) {
+            Result result = captureFrame(checkFc ? expectedFc : 0, frame, &frameLen);
+            if(result == NOTHING_TO_DO) {
                 continue;
             }
-            
-            if (result != SUCCESS) {
-                return Error(result.status, result.fc);
+            if(result != SUCCESS) {
+                return result;
             }
-            
-            // If we expect specific FC, check it
-            if (checkFc && result.fc != expectedFc) {
-                continue;
-            }
-            
-            memcpy(&msg, &rxBuffer[3], sizeof(T));
+            memcpy(&msg, &frame[3], sizeof(T));
             return Success(result.fc);
         }
-        
+
+        // Si on arrive ici, on a pas réussi à capturer la frame dans le temps imparti
         return Error(ERR_TIMEOUT);
     }
 

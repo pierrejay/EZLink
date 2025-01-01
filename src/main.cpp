@@ -1,6 +1,8 @@
-#define ESP32
+// #define STM32
 
-#if defined(STM32)
+#if defined(STM32F0) || defined(STM32F1) || defined(STM32F2) || defined(STM32F3) || \
+    defined(STM32F4) || defined(STM32F7) || defined(STM32L0) || defined(STM32L1) || \
+    defined(STM32L4) || defined(STM32H7)
 
 #include <Arduino.h>
 #include "SimpleComm.h"
@@ -113,14 +115,13 @@ SimpleComm master(&UART1);
 SimpleComm slave(&UART2);
 
 // Task configuration (in ticks, assuming configTICK_RATE_HZ = 100)
-#define TICK_PERIOD_MS (1000/configTICK_RATE_HZ)
-#define MASTER_DELAY_TICKS (MASTER_DELAY_US/TICK_PERIOD_MS)
-#define SLAVE_DELAY_TICKS  (SLAVE_DELAY_US/TICK_PERIOD_MS)
+#define MASTER_DELAY_TICKS (MASTER_DELAY_US/1000/portTICK_PERIOD_MS)  // Convert us to ms then to ticks
+#define SLAVE_DELAY_TICKS  (SLAVE_DELAY_US/1000/portTICK_PERIOD_MS)   // Convert us to ms then to ticks
 
 // Master task running on core 0
 void masterTask(void* parameter) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(MASTER_DELAY_TICKS);
+    const TickType_t xFrequency = MASTER_DELAY_TICKS;  // Already in ticks
     
     while(true) {
         uint32_t startTime = micros();
@@ -166,7 +167,7 @@ void masterTask(void* parameter) {
 // Slave task running on core 1
 void slaveTask(void* parameter) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(SLAVE_DELAY_TICKS);
+    const TickType_t xFrequency = SLAVE_DELAY_TICKS;  // Already in ticks
     
     while(true) {
         auto result = slave.poll();
