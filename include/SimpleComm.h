@@ -381,7 +381,7 @@ private:
         // Check if already registered (by FC or by name)
         for(size_t i = 0; i < MAX_PROTOS; i++) {
             if(protos[i].fc != NULL_FC) {
-                if(protos[i].fc == T::fc) {
+                if(protos[i].fc == fc) {  // On compare avec le FC modifié !
                     return Error(ERR_FC_ALREADY_REGISTERED, T::fc);
                 }
                 if(strEqual(protos[i].name, T::name)) {
@@ -397,7 +397,7 @@ private:
         }
         
         // Register the proto
-        slot->fc = T::fc;
+        slot->fc = fc;  // Utiliser le FC modifié passé en paramètre
         slot->type = T::type;
         slot->size = sizeof(T);
         slot->name = T::name;  // Store the name
@@ -454,13 +454,21 @@ private:
         }
     }
 
+    // Ring buffer constants
+    static constexpr uint8_t SOF_NOT_FOUND = 255;
+
     // Ring buffer pour la réception
     uint8_t rxBuffer[MAX_FRAME_SIZE];
     uint8_t head = 0;
     uint8_t tail = 0;
     uint8_t count = 0;
 
-    // Helpers pour le ring buffer
+    // Ring buffer management
+    void clearBuffer() {
+        count = 0;
+        head = tail = 0;
+    }
+
     void pushByte(uint8_t byte) {
         if (count < MAX_FRAME_SIZE) {
             rxBuffer[head] = byte;
@@ -492,17 +500,20 @@ private:
         count -= n;
     }
 
-    // Cherche un SOF dans le buffer, retourne sa position ou 255 si non trouvé
+    bool isBufferEmpty() const {
+        return count == 0;
+    }
+
+    // Cherche un SOF dans le buffer, retourne sa position ou SOF_NOT_FOUND
     uint8_t findSOF() const {
         for (uint8_t i = 0; i < count; i++) {
             if (peekByte(i) == START_OF_FRAME) {
                 return i;
             }
         }
-        return 255;
+        return SOF_NOT_FOUND;
     }
 
-    // Nouvelle fonction de capture de frame
     Result captureFrame(uint8_t expectedFc = 0, uint8_t* outFrame = nullptr, size_t* outLen = nullptr) {
         // D'abord on lit tout ce qui est disponible sur le port série
         while (serial->available() && count < MAX_FRAME_SIZE) {
@@ -525,10 +536,9 @@ private:
             if (peekByte(0) != START_OF_FRAME) {
                 // On cherche le prochain SOF
                 uint8_t nextSof = findSOF();
-                if (nextSof == 255) {
+                if (nextSof == SOF_NOT_FOUND) {
                     // Pas de SOF, on vide tout
-                    count = 0;
-                    head = tail = 0;
+                    clearBuffer();
                 }
                 else {
                     // On avance jusqu'au SOF
