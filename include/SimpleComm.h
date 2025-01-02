@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <functional>
 #include <type_traits>
+#include "RingBuffer.h"
 
 // TODO FOR NEXT VERSIONS:
 // Add support for custom communication layer (UART, SPI, ... => simple byte input/output ?)
@@ -58,18 +59,18 @@
 class SimpleComm {
 public:
     // Buffer/frame size
-    static constexpr size_t MAX_FRAME_SIZE = 32;
+    static constexpr inline size_t MAX_FRAME_SIZE = 32;
     // Frame format
-    static constexpr uint8_t START_OF_FRAME = 0xAA;
-    static constexpr uint8_t FRAME_HEADER_SIZE = 2;  // SOF + LEN
-    static constexpr size_t FRAME_OVERHEAD = 4;      // SOF + LEN + FC + CRC
+    static constexpr inline uint8_t START_OF_FRAME = 0xAA;
+    static constexpr inline uint8_t FRAME_HEADER_SIZE = 2;  // SOF + LEN
+    static constexpr inline size_t FRAME_OVERHEAD = 4;      // SOF + LEN + FC + CRC
     // FC constants
-    static constexpr uint8_t NULL_FC = 0;  // FC=0 reserved/invalid
-    static constexpr uint8_t MAX_PROTOS = 10;  // Maximum number of protos
-    static constexpr uint8_t FC_RESPONSE_BIT = 0x80;  // Bit 7 set pour les réponses
-    static constexpr uint8_t FC_MAX_USER = 0x7F;      // 127 FC utilisateur max (0-127)
+    static constexpr inline uint8_t NULL_FC = 0;  // FC=0 reserved/invalid
+    static constexpr inline uint8_t MAX_PROTOS = 10;  // Maximum number of protos
+    static constexpr inline uint8_t FC_RESPONSE_BIT = 0x80;  // Bit 7 set pour les réponses
+    static constexpr inline uint8_t FC_MAX_USER = 0x7F;      // 127 FC utilisateur max (0-127)
     // Default timeouts
-    static constexpr uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // Wait max 500ms for a response
+    static constexpr inline uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // Wait max 500ms for a response
     
     // Proto types
     enum class ProtoType {
@@ -450,119 +451,55 @@ private:
         return Success(T::fc);
     }
 
-    // Flush RX buffer until SOF is found
-    void flushRxBufferUntilSOF() {
-        while(serial->available()) {
-            if(serial->peek() == START_OF_FRAME) {
-                return; // SOF trouvé mais pas consommé
-            }
-            serial->read(); // Consomme uniquement les octets non-SOF
-        }
-    }
-
     // Ring buffer constants
     static constexpr uint8_t SOF_NOT_FOUND = 255;
 
     // Ring buffer pour la réception
-    uint8_t rxBuffer[MAX_FRAME_SIZE];
-    uint8_t head = 0;
-    uint8_t tail = 0;
-    uint8_t count = 0;
-
-    // Ring buffer management
-    void clearBuffer() {
-        count = 0;
-        head = tail = 0;
-    }
-
-    void pushByte(uint8_t byte) {
-        if (count < MAX_FRAME_SIZE) {
-            rxBuffer[head] = byte;
-            head = (head + 1) % MAX_FRAME_SIZE;
-            count++;
-        }
-    }
-
-    uint8_t popByte() {
-        if (count > 0) {
-            uint8_t byte = rxBuffer[tail];
-            tail = (tail + 1) % MAX_FRAME_SIZE;
-            count--;
-            return byte;
-        }
-        return 0;
-    }
-
-    uint8_t peekByte(uint8_t offset = 0) const {
-        if (offset < count) {
-            return rxBuffer[(tail + offset) % MAX_FRAME_SIZE];
-        }
-        return 0;
-    }
-
-    void discardBytes(uint8_t n) {
-        n = std::min(n, count);
-        tail = (tail + n) % MAX_FRAME_SIZE;
-        count -= n;
-    }
-
-    bool isBufferEmpty() const {
-        return count == 0;
-    }
-
-    // Cherche un SOF dans le buffer, retourne sa position ou SOF_NOT_FOUND
-    uint8_t findSOF() const {
-        for (uint8_t i = 0; i < count; i++) {
-            if (peekByte(i) == START_OF_FRAME) {
-                return i;
-            }
-        }
-        return SOF_NOT_FOUND;
-    }
+    RingBuffer<uint8_t, MAX_FRAME_SIZE> rxBuffer;
 
     Result captureFrame(uint8_t expectedFc = 0, uint8_t* outFrame = nullptr, size_t* outLen = nullptr) {
         // D'abord on lit tout ce qui est disponible sur le port série
-        while (serial->available() && count < MAX_FRAME_SIZE) {
-            pushByte(serial->read());
+        while (serial->available() && rxBuffer.size() < MAX_FRAME_SIZE) {
+            rxBuffer.push(serial->read());
         }
 
         // Pas assez de données
-        if (count == 0) {
+        if (rxBuffer.size() == 0) {
             return NoData();
         }
 
         // Si pas de capture en cours, on cherche un SOF valide
         if (!frameCapturePending) {
             // Pas de données
-            if (count == 0) {
+            if (rxBuffer.size() == 0) {
                 return NoData();
             }
             
             // L'octet courant doit être un SOF
-            if (peekByte(0) != START_OF_FRAME) {
+            if (rxBuffer.peek(0) != START_OF_FRAME) {
                 // On cherche le prochain SOF
-                uint8_t nextSof = findSOF();
-                if (nextSof == SOF_NOT_FOUND) {
+                uint8_t* nextSof = rxBuffer.find(START_OF_FRAME);
+                if (nextSof == nullptr) {
                     // Pas de SOF, on vide tout
-                    clearBuffer();
+                    rxBuffer.clear();
                 }
                 else {
                     // On avance jusqu'au SOF
-                    discardBytes(nextSof);
+                    rxBuffer.dumpUntil(nextSof);
                 }
                 return Error(ERR_INVALID_SOF);
             }
             
             // SOF trouvé, on attend d'avoir aussi LEN
-            if (count < 2) {
+            if (rxBuffer.size() < 2) {
                 return NoData();
             }
             
             // Vérifier LEN immédiatement
-            uint8_t frameSize = peekByte(1);
+            uint8_t frameSize = rxBuffer.peek(1);
             if (frameSize < FRAME_OVERHEAD || frameSize > MAX_FRAME_SIZE) {
                 // On jette le SOF et le LEN invalide
-                discardBytes(2);
+                rxBuffer.dump(2);
                 return Error(ERR_INVALID_LEN);
             }
             
@@ -570,35 +507,35 @@ private:
         }
 
         // On doit avoir au moins 2 octets pour lire le LEN
-        if (count < 2) {
+        if (rxBuffer.size() < 2) {
             return NoData();
         }
 
         // Vérifier LEN
-        uint8_t frameSize = peekByte(1);
+        uint8_t frameSize = rxBuffer.peek(1);
         if (frameSize < FRAME_OVERHEAD || frameSize > MAX_FRAME_SIZE) {
             frameCapturePending = false;
-            discardBytes(1); // On jette juste le SOF invalide
+            rxBuffer.dump(1); // On jette juste le SOF invalide
             return Error(ERR_INVALID_LEN);
         }
 
         // Attendre d'avoir la frame complète
-        if (count < frameSize) {
+        if (rxBuffer.size() < frameSize) {
             return NoData();
         }
 
         // Vérifier FC si nécessaire
-        uint8_t fc = peekByte(2);
+        uint8_t fc = rxBuffer.peek(2);
         if (expectedFc > 0 && fc != expectedFc) {
             frameCapturePending = false;
-            discardBytes(1); // On jette le SOF invalide
+            rxBuffer.dump(1); // On jette le SOF invalide
             return Error(ERR_INVALID_FC, fc);
         }
 
         // On a une frame complète, on la copie pour le CRC
         uint8_t tempFrame[MAX_FRAME_SIZE];
         for (uint8_t i = 0; i < frameSize; i++) {
-            tempFrame[i] = peekByte(i);
+            tempFrame[i] = rxBuffer.peek(i);
         }
 
         // Vérifier CRC
@@ -609,13 +546,13 @@ private:
             frameCapturePending = false;
 
             // Chercher un SOF dans le reste des données
-            uint8_t nextSof = findSOF();
-            if (nextSof != 255 && nextSof < frameSize) {
+            uint8_t* nextSof = rxBuffer.find(START_OF_FRAME);
+            if (nextSof != nullptr && rxBuffer.indexOf(nextSof) < frameSize) {
                 // On a trouvé un SOF, on avance jusqu'à lui
-                discardBytes(nextSof);
+                rxBuffer.dumpUntil(nextSof);
             } else {
                 // Pas de SOF, on jette toute la frame
-                discardBytes(frameSize);
+                rxBuffer.dump(frameSize);
             }
             return Error(ERR_CRC, fc);
         }
@@ -627,7 +564,7 @@ private:
         }
 
         // On consomme la frame
-        discardBytes(frameSize);
+        rxBuffer.dump(frameSize);
         frameCapturePending = false;
 
         return Success(fc);

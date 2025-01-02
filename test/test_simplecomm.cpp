@@ -832,6 +832,126 @@ void test_busy_receiving() {
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
 }
 
+void test_request_during_response_wait() {
+    MockSerial serial;
+    serial.reset();
+    SimpleComm comm(&serial);
+    
+    // Enregistrer les messages
+    comm.registerRequest<GetStatusMsg>();
+    comm.registerResponse<StatusResponseMsg>();
+    comm.registerRequest<SetLedMsg>();
+    
+    // Préparer les messages
+    GetStatusMsg statusReq{};
+    StatusResponseMsg statusResp{};
+    
+    // Désactiver l'auto-réponse pour contrôler la séquence
+    serial.disableAutoResponse();
+    
+    // 1. Envoyer une requête de status
+    printf("\nSending status request...\n");
+    auto result = comm.sendRequest(statusReq, statusResp);  // Non bloquant car pas de réponse
+    
+    // 2. Pendant qu'on attend la réponse, on reçoit une requête LED
+    uint8_t incomingRequest[] = {
+        SimpleComm::START_OF_FRAME,
+        sizeof(SetLedMsg) + SimpleComm::FRAME_OVERHEAD,
+        SetLedMsg::fc,
+        0x01,  // state = 1
+        0x00   // CRC à calculer
+    };
+    incomingRequest[4] = SimpleComm::calculateCRC(incomingRequest, 4);
+    
+    printf("Injecting LED request while waiting for status response...\n");
+    serial.injectData(incomingRequest, sizeof(incomingRequest));
+    
+    // 3. Le poll() doit traiter la requête LED normalement
+    result = comm.poll();
+    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(SetLedMsg::fc, result.fc);
+    
+    // 4. Maintenant on reçoit la réponse de status (tardive)
+    uint8_t lateResponse[] = {
+        SimpleComm::START_OF_FRAME,
+        sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD,
+        StatusResponseMsg::fc | SimpleComm::FC_RESPONSE_BIT,
+        0x01,  // state = 1
+        0x00, 0x00, 0x00, 0x00,  // uptime = 0
+        0x00   // CRC à calculer
+    };
+    lateResponse[8] = SimpleComm::calculateCRC(lateResponse, 8);
+    
+    printf("Injecting late status response...\n");
+    serial.injectData(lateResponse, sizeof(lateResponse));
+    
+    // 5. Le poll() doit rejeter la réponse tardive
+    result = comm.poll();
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_UNEXPECTED_RESPONSE, result.status);
+}
+
+void test_duplicate_response() {
+    MockSerial serial;
+    serial.reset();
+    SimpleComm comm(&serial);
+    
+    // Enregistrer les messages
+    comm.registerRequest<GetStatusMsg>();
+    comm.registerResponse<StatusResponseMsg>();
+    
+    // Préparer les messages
+    GetStatusMsg statusReq{};
+    StatusResponseMsg statusResp{};
+    
+    // Désactiver l'auto-réponse pour contrôler la séquence
+    serial.disableAutoResponse();
+    
+    // 1. Envoyer une requête de status
+    printf("\nSending status request...\n");
+    
+    // 2. Préparer une réponse valide
+    uint8_t validResponse[] = {
+        SimpleComm::START_OF_FRAME,
+        sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD,
+        StatusResponseMsg::fc | SimpleComm::FC_RESPONSE_BIT,
+        0x01,  // state = 1
+        0x00, 0x10, 0x00, 0x00,  // uptime = 4096
+        0x00   // CRC à calculer
+    };
+    validResponse[8] = SimpleComm::calculateCRC(validResponse, 8);
+    
+    // 3. Envoyer la requête et injecter la première réponse
+    auto result = comm.sendRequest(statusReq, statusResp);
+    printf("Injecting first (valid) response...\n");
+    serial.injectData(validResponse, sizeof(validResponse));
+    result = comm.sendRequest(statusReq, statusResp);
+    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(0x01, statusResp.state);
+    TEST_ASSERT_EQUAL(4096, statusResp.uptime);
+    
+    // 4. Injecter une deuxième réponse identique
+    printf("Injecting duplicate response...\n");
+    serial.injectData(validResponse, sizeof(validResponse));
+    result = comm.poll();
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_UNEXPECTED_RESPONSE, result.status);
+    
+    // 5. Injecter une troisième réponse avec des données différentes
+    uint8_t duplicateResponse[] = {
+        SimpleComm::START_OF_FRAME,
+        sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD,
+        StatusResponseMsg::fc | SimpleComm::FC_RESPONSE_BIT,
+        0x02,  // state différent
+        0x00, 0x20, 0x00, 0x00,  // uptime différent
+        0x00   // CRC à calculer
+    };
+    duplicateResponse[8] = SimpleComm::calculateCRC(duplicateResponse, 8);
+    
+    printf("Injecting different duplicate response...\n");
+    serial.injectData(duplicateResponse, sizeof(duplicateResponse));
+    result = comm.poll();
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_UNEXPECTED_RESPONSE, result.status);
+}
+
 int main(void) {
     UNITY_BEGIN();
     
@@ -861,14 +981,13 @@ int main(void) {
     // Tests de robustesse
     RUN_TEST(test_stress);
     RUN_TEST(test_mixed_message_types);
-    
+    RUN_TEST(test_busy_receiving);
+
     // Tests spécifiques Request/Response
     RUN_TEST(test_response_fc_calculation);
     RUN_TEST(test_response_wrong_fc);
-    
-    // Tests de réception en cours
-    RUN_TEST(test_busy_receiving);
+    RUN_TEST(test_request_during_response_wait);
+    RUN_TEST(test_duplicate_response);
 
-    
     return UNITY_END();
 } 
