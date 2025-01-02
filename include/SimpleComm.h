@@ -514,8 +514,14 @@ private:
             return NoData();
         }
 
-        // Si pas de capture en cours, on cherche un SOF
+        // Si pas de capture en cours, on cherche un SOF valide
         if (!frameCapturePending) {
+            // Pas de données
+            if (count == 0) {
+                return NoData();
+            }
+            
+            // L'octet courant doit être un SOF
             if (peekByte(0) != START_OF_FRAME) {
                 // On cherche le prochain SOF
                 uint8_t nextSof = findSOF();
@@ -528,9 +534,22 @@ private:
                     // On avance jusqu'au SOF
                     discardBytes(nextSof);
                 }
-                // Dans tous les cas on signale l'erreur
                 return Error(ERR_INVALID_SOF);
             }
+            
+            // SOF trouvé, on attend d'avoir aussi LEN
+            if (count < 2) {
+                return NoData();
+            }
+            
+            // Vérifier LEN immédiatement
+            uint8_t frameSize = peekByte(1);
+            if (frameSize < FRAME_OVERHEAD || frameSize > MAX_FRAME_SIZE) {
+                // On jette le SOF et le LEN invalide
+                discardBytes(2);
+                return Error(ERR_INVALID_LEN);
+            }
+            
             frameCapturePending = true;
         }
 
