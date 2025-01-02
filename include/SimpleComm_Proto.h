@@ -23,6 +23,14 @@ using ProtoType = SimpleComm::ProtoType;
  *    - The REQUEST message defines its response type (ResponseType)
  *    - The receiver will respond with the correct type
  *    - Ex: GetStatusMsg/StatusResponseMsg
+ * 
+ * FC (Function Code) rules:
+ * - User assigns FC between 1-127 for requests/commands
+ * - Library automatically assigns FC+128 for responses
+ * - FC 0 is reserved (invalid)
+ * - When defining a RESPONSE message type, use the same FC 
+ *   as its request (the library will handle the FC+128)
+ * 
  */
 
 // Message FIRE_AND_FORGET : simple LED command
@@ -42,19 +50,19 @@ struct SetPwmMsg {
     uint32_t freq;  // Frequency in Hz
 } __attribute__((packed));
 
-// Message RESPONSE : status response
-struct StatusResponseMsg {
-    static constexpr ProtoType type = ProtoType::RESPONSE;
-    static constexpr const char* name = "RSP_STA";
-    static constexpr uint8_t fc = 4;
-    uint8_t state;    // Global state
-    uint32_t uptime;  // Uptime since startup
-} __attribute__((packed));
-
 // Message REQUEST : status request
 struct GetStatusMsg {
     static constexpr ProtoType type = ProtoType::REQUEST;
     static constexpr const char* name = "REQ_STA";
     static constexpr uint8_t fc = 3;
     using ResponseType = StatusResponseMsg;  // Expected response type
+} __attribute__((packed));
+
+// Message RESPONSE : status response
+struct StatusResponseMsg {
+    static constexpr ProtoType type = ProtoType::RESPONSE;
+    static constexpr const char* name = "RSP_STA";
+    static constexpr uint8_t fc = 3; // Must be the same as the request FC
+    uint8_t state;    // Global state
+    uint32_t uptime;  // Uptime since startup
 } __attribute__((packed));

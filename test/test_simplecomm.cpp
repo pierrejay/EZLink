@@ -296,7 +296,7 @@ void test_send_msg_with_ack(void) {
     SimpleComm comm(&serial);
     
     // Register the proto
-    comm.registerProto<SetPwmMsg>();
+    comm.registerRequest<SetPwmMsg>();
     
     // Test with auto-response from mock
     SetPwmMsg msg{.pin = 5, .freq = 1000};
@@ -309,8 +309,8 @@ void test_request_response(void) {
     SimpleComm comm(&serial);
     
     // Register the protos
-    comm.registerProto<GetStatusMsg>();
-    comm.registerProto<StatusResponseMsg>();
+    comm.registerRequest<GetStatusMsg>();
+    comm.registerResponse<StatusResponseMsg>();
     
     // Configure the request handler that will generate the response
     comm.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp) {
@@ -578,8 +578,8 @@ void test_mixed_message_types(void) {
     // Register different types of messages
     comm.registerProto<SetLedMsg>();        // FIRE_AND_FORGET
     comm.registerProto<SetPwmMsg>();        // ACK_REQUIRED
-    comm.registerProto<GetStatusMsg>();     // REQUEST
-    comm.registerProto<StatusResponseMsg>(); // RESPONSE
+    comm.registerRequest<GetStatusMsg>();     // REQUEST
+    comm.registerResponse<StatusResponseMsg>(); // RESPONSE
     
     // Test a mixed sequence
     SetLedMsg led{.state = 1};

@@ -9,6 +9,52 @@
 // Support validation of the full message structure (hash ?)
 // Add more CRC options
 
+/**
+ * SimpleComm - Simple communication protocol
+ * 
+ * Message types:
+ * - FIRE_AND_FORGET: Simple message without response (FC 1-127)
+ * - ACK_REQUIRED: Message requiring echo confirmation (FC 1-127, response FC = request FC | 0x80)
+ * - REQUEST: Message requiring specific response (FC 1-127)
+ * - RESPONSE: Response to a REQUEST (FC = request FC | 0x80)
+ * 
+ * FC (Function Code) rules:
+ * - Request/Command FC must be between 1-127
+ * - Response FC are automatically set to request FC | 0x80 (128-255)
+ * - FC 0 is reserved (invalid)
+ * 
+ * Usage:
+ * - Register requests with registerRequest<T>()
+ * - Register responses with registerResponse<T>()
+ * - Responses are automatically rejected by poll() to prevent late response handling
+* 
+ * Safety & Robustness features:
+ * 1. Buffer management
+ *    - Buffer-driven approach (no interbyte timeout)
+ *    - Automatic buffer cleanup on invalid frames
+ *    - Frame capture state tracking
+ * 
+ * 2. Protocol safety
+ *    - Request/Response distinction using FC MSB
+ *    - Automatic rejection of late responses
+ *    - Protection against malformed frames
+ *    - CRC validation
+ * 
+ * 3. Bidirectional safety
+ *    - Detection of pending frame capture
+ *    - Prevention of message collisions
+ *    - Protection against response conflicts
+ * 
+ * 4. Compile-time validations
+ *    - Message type checking
+ *    - FC range validation (1-127 requests, 128-255 responses)
+ *    - Request/Response type matching
+ * 
+ * Error handling ensures proper cleanup and state reset in all cases,
+ * making the protocol suitable for both master/slave and bidirectional
+ * communication patterns.
+ */
+
 class SimpleComm {
 public:
     // Buffer/frame size
@@ -20,6 +66,8 @@ public:
     // FC constants
     static constexpr uint8_t NULL_FC = 0;  // FC=0 reserved/invalid
     static constexpr uint8_t MAX_PROTOS = 10;  // Maximum number of protos
+    static constexpr uint8_t FC_RESPONSE_BIT = 0x80;  // Bit 7 set pour les réponses
+    static constexpr uint8_t FC_MAX_USER = 0x7F;      // 127 FC utilisateur max (0-127)
     // Default timeouts
     static constexpr uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // Wait max 500ms for a response
     
@@ -42,6 +90,7 @@ public:
         ERR_TOO_MANY_PROTOS,       // Too many protos registered
         ERR_INVALID_NAME,          // Name is null or empty
         // Poll & sendMsg errors
+        ERR_BUSY_RECEIVING,      // Frame capture pending, we must wait for the end of the frame to send a new message
         ERR_INVALID_FC,     // FC not registered
         ERR_INVALID_SOF,    // Invalid SOF
         ERR_INVALID_LEN,    // Invalid length
@@ -68,46 +117,34 @@ public:
         , responseTimeoutMs(responseTimeoutMs)
     {}
 
-
-    // Register message prototype
+    // Register REQUEST prototype
     template<typename T>
-    Result registerProto() {
+    Result registerRequest() {
+        static_assert(T::type == ProtoType::REQUEST || 
+                     T::type == ProtoType::FIRE_AND_FORGET || 
+                     T::type == ProtoType::ACK_REQUIRED,
+                     "Wrong message type - use registerResponse() for RESPONSE types");
         static_assert(T::fc != NULL_FC, "FC=0 is reserved/invalid");
+        static_assert((T::fc & FC_RESPONSE_BIT) == 0, "Request FC must be <= 127");
         static_assert(T::name != nullptr, "Message must have a name");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert(T::fc < 256, "FC must be < 256");
         static_assert(sizeof(T) + FRAME_OVERHEAD <= MAX_FRAME_SIZE, "Message too large");
-        
-        // Invalid names (nullptr or "") are blocked at compilation
-        if(T::name == nullptr || T::name[0] == '\0') {
-            return Error(ERR_INVALID_NAME, T::fc);
-        }
-        
-        // Check if already registered (by FC or by name)
-        for(size_t i = 0; i < MAX_PROTOS; i++) {
-            if(protos[i].fc != NULL_FC) {
-                if(protos[i].fc == T::fc) {
-                    return Error(ERR_FC_ALREADY_REGISTERED, T::fc);
-                }
-                if(strEqual(protos[i].name, T::name)) {
-                    return Error(ERR_NAME_ALREADY_REGISTERED, T::fc);
-                }
-            }
-        }
-        
-        // Find a free slot
-        ProtoStore* slot = findFreeSlot();
-        if(slot == nullptr) {
-            return Error(ERR_TOO_MANY_PROTOS, T::fc);
-        }
-        
-        // Register the proto
-        slot->fc = T::fc;
-        slot->type = T::type;
-        slot->size = sizeof(T);
-        slot->name = T::name;  // Store the name
-        
-        return Success(T::fc);
+        return registerProtoInternal<T>(T::fc);
+    }
+
+    // Register RESPONSE prototype
+    template<typename T>
+    Result registerResponse() {
+        static_assert(T::type == ProtoType::RESPONSE, 
+                     "Wrong message type - registerResponse() only works with RESPONSE types");
+        static_assert(T::fc != NULL_FC, "FC=0 is reserved/invalid");
+        static_assert((T::fc & FC_RESPONSE_BIT) == FC_RESPONSE_BIT, "Response FC must be >= 128");
+        static_assert(T::name != nullptr, "Message must have a name");
+        static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
+        static_assert(sizeof(T) + FRAME_OVERHEAD <= MAX_FRAME_SIZE, "Message too large");
+
+        // We replace the FC by its complement (FC | 0x80)
+        return registerProtoInternal<T>(T::fc | FC_RESPONSE_BIT);
     }
 
     // Handler for FIRE_AND_FORGET and ACK_REQUIRED messages
@@ -138,6 +175,9 @@ public:
     template<typename T>
     Result sendMsg(const T& msg) {
         static_assert(T::type == ProtoType::FIRE_AND_FORGET, "Wrong message type");
+        static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
+        static_assert((REQ::fc & FC_RESPONSE_BIT) == 0, "FC must be <= 127");
+        static_assert(T::fc != NULL_FC, "FC must not be NULL (0)");  // Check at compilation
         return sendMsgInternal(msg);
     }
 
@@ -146,7 +186,8 @@ public:
     Result sendMsgAck(const T& msg) {
         static_assert(T::type == ProtoType::ACK_REQUIRED, "Wrong message type");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert(T::fc < 256, "FC must be < 256");
+        static_assert((REQ::fc & FC_RESPONSE_BIT) == 0, "FC must be <= 127");
+        static_assert(T::fc != NULL_FC, "FC must not be NULL (0)");  // Check at compilation
         
         // Send message first
         Result result = sendMsgInternal(msg);
@@ -161,7 +202,7 @@ public:
         
         unsigned long startTime = millis();
         while(millis() - startTime < responseTimeoutMs) {
-            result = captureFrame(T::fc, frame, &frameLen);
+            result = captureFrame(T::fc | FC_RESPONSE_BIT, frame, &frameLen);
             if(result == NOTHING_TO_DO) {
                 continue;
             }
@@ -178,6 +219,7 @@ public:
             return Success(T::fc);
         }
         
+        frameCapturePending = false; // Reset frame capture - protects against late responses
         return Error(ERR_TIMEOUT);
     }
 
@@ -186,10 +228,12 @@ public:
     Result sendRequest(const REQ& req, RESP& resp) {
         static_assert(REQ::type == ProtoType::REQUEST, "Wrong message type");
         static_assert(RESP::type == ProtoType::RESPONSE, "Response must be a RESPONSE type");
+        static_assert(std::is_same<RESP, typename REQ::ResponseType>::value, "Response type doesn't match request's ResponseType");
         static_assert(std::is_standard_layout<REQ>::value, "Request type must be POD/standard-layout");
         static_assert(std::is_standard_layout<RESP>::value, "Response type must be POD/standard-layout");
-        static_assert(std::is_same<RESP, typename REQ::ResponseType>::value, "Response type doesn't match request's ResponseType");
-        static_assert(REQ::fc < 256 && RESP::fc < 256, "FC must be < 256");
+        static_assert(REQ::fc != NULL_FC, "FC must not be NULL (0)");
+        static_assert((REQ::fc & FC_RESPONSE_BIT) == 0, "Request FC must be <= 127");
+        static_assert((RESP::fc & FC_RESPONSE_BIT) == FC_RESPONSE_BIT, "Response FC must be >= 128");
         
         // Send request
         Result result = sendMsgInternal(req);
@@ -216,6 +260,7 @@ public:
             return Success(RESP::fc);
         }
         
+        frameCapturePending = false; // Reset frame capture - protects against late responses
         return Error(ERR_TIMEOUT);
     }
 
@@ -224,14 +269,18 @@ public:
         // Tente de capturer une frame
         Result result = captureFrame();
         
-        // Si la capture n'a pas réussi, on vide le buffer
+        // Si la capture n'a pas réussi, on retourne l'erreur obtenue
         if(result != SUCCESS && result != NOTHING_TO_DO) {
-            flushRxBufferUntilSOF();
             return result;
         }
         
-        // Si la capture a réussi, on appelle le handler
+        // Si la capture a réussi, vérifier que ce n'est pas une réponse
         if(result == SUCCESS) {
+            // Rejeter les réponses (bit 7 setté)
+            if((result.fc & FC_RESPONSE_BIT) != 0) {
+                return Error(ERR_INVALID_FC, result.fc);
+            }
+
             // Appeler le handler si enregistré
             ProtoStore* proto = findProto(result.fc);
             if(proto && proto->callback) {
@@ -287,7 +336,7 @@ private:
     uint32_t responseTimeoutMs;   // Timeout for waiting for a response
     ProtoStore protos[MAX_PROTOS];  // Indexed by FC
     uint8_t rxBuffer[MAX_FRAME_SIZE];
-    bool gotSOF = false;  // État de la capture de frame
+    bool frameCapturePending = false;  // État de la capture de frame
 
 
     // Helpers to create results
@@ -295,12 +344,51 @@ private:
     static constexpr Result Success(uint8_t fc) { return Result{SUCCESS, fc}; }
     static constexpr Result NoData() { return Result{NOTHING_TO_DO, NULL_FC}; }
 
+    // Register message prototype
+    template<typename T>
+    Result registerProtoInternal(uint8_t fc) {
+        // Proto validation is already done in registerRequest() and registerResponse()
+        
+        // Invalid names (nullptr or "") are blocked at compilation
+        if(T::name == nullptr || T::name[0] == '\0') {
+            return Error(ERR_INVALID_NAME, T::fc);
+        }
+        
+        // Check if already registered (by FC or by name)
+        for(size_t i = 0; i < MAX_PROTOS; i++) {
+            if(protos[i].fc != NULL_FC) {
+                if(protos[i].fc == T::fc) {
+                    return Error(ERR_FC_ALREADY_REGISTERED, T::fc);
+                }
+                if(strEqual(protos[i].name, T::name)) {
+                    return Error(ERR_NAME_ALREADY_REGISTERED, T::fc);
+                }
+            }
+        }
+        
+        // Find a free slot
+        ProtoStore* slot = findFreeSlot();
+        if(slot == nullptr) {
+            return Error(ERR_TOO_MANY_PROTOS, T::fc);
+        }
+        
+        // Register the proto
+        slot->fc = T::fc;
+        slot->type = T::type;
+        slot->size = sizeof(T);
+        slot->name = T::name;  // Store the name
+        
+        return Success(T::fc);
+    }
+
     // Send message
     template<typename T>
     Result sendMsgInternal(const T& msg) {
-        static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert(T::fc < 256, "FC must be < 256");
-        static_assert(T::fc != NULL_FC, "FC must not be NULL (0)");  // Check at compilation
+
+        // Check if we are already capturing a frame
+        if(frameCapturePending) {
+            return Error(ERR_BUSY_RECEIVING, T::fc);
+        }
         
         // Check if proto is registered and matches
         ProtoStore* proto = findProto(T::fc);
@@ -345,7 +433,7 @@ private:
     // Nouvelle fonction de capture de frame
     Result captureFrame(uint8_t expectedFc = 0, uint8_t* outFrame = nullptr, size_t* outLen = nullptr) {
         // Si pas de SOF, chercher le prochain
-        if(!gotSOF) {
+        if(!frameCapturePending) {
             if(!serial->available()) {
                 return NoData();
             }
@@ -354,10 +442,10 @@ private:
             if(byte != START_OF_FRAME) {
                 return Error(ERR_INVALID_SOF);
             }
-            gotSOF = true;
+            frameCapturePending = true;
         }
 
-        // À ce stade on a un SOF valide
+        // À ce stade on a capturé un SOF valide
         if(serial->available() < 1) {
             return NoData(); // Pas assez de données pour LEN
         }
@@ -365,8 +453,8 @@ private:
         // Vérifier LEN sans le consommer
         uint8_t frameSize = serial->peek();
         if(frameSize < FRAME_OVERHEAD) {
-            serial->read(); // Consommer LEN invalide
-            gotSOF = false;
+            frameCapturePending = false;
+            flushRxBufferUntilSOF(); // Frame invalide, on vide le buffer
             return Error(ERR_INVALID_LEN);
         }
 
@@ -382,8 +470,9 @@ private:
 
         for(size_t i = 2; i < frameSize; i++) {
             if(serial->peek() == START_OF_FRAME && i < frameSize-1) {
-                gotSOF = false;
-                return Error(ERR_INVALID_LEN); // Frame tronquée
+                frameCapturePending = false;
+                flushRxBufferUntilSOF(); // Frame tronquée, on vide le buffer
+                return Error(ERR_INVALID_LEN);
             }
             tempFrame[i] = serial->read();
         }
@@ -391,7 +480,8 @@ private:
         // Valider FC
         uint8_t fc = tempFrame[2];
         if(expectedFc > 0 && fc != expectedFc) {
-            gotSOF = false;
+            frameCapturePending = false;
+            flushRxBufferUntilSOF(); // Frame invalide, on vide le buffer
             return Error(ERR_INVALID_FC, fc);
         }
 
@@ -399,7 +489,8 @@ private:
         if(expectedFc > 0) {
             ProtoStore* proto = findProto(fc);
             if(!proto || proto->size != frameSize - FRAME_OVERHEAD) {
-                gotSOF = false;
+                frameCapturePending = false;
+                flushRxBufferUntilSOF(); // Frame invalide, on vide le buffer
                 return Error(ERR_PROTO_MISMATCH, fc);
             }
         }
@@ -408,7 +499,8 @@ private:
         uint8_t receivedCRC = tempFrame[frameSize-1];
         uint8_t calculatedCRC = calculateCRC(tempFrame, frameSize-1);
         if(receivedCRC != calculatedCRC) {
-            gotSOF = false;
+            frameCapturePending = false;
+            flushRxBufferUntilSOF(); // Frame invalide, on vide le buffer
             return Error(ERR_CRC, fc);
         }
 
@@ -418,32 +510,8 @@ private:
             *outLen = frameSize;
         }
 
-        gotSOF = false;
+        frameCapturePending = false;
         return Success(fc);
-    }
-
-    // Helper for receiving specific message type
-    template<typename T>
-    Result receiveMsg(T& msg, uint8_t expectedFc, bool checkFc = false) {
-        uint8_t frame[MAX_FRAME_SIZE];
-        size_t frameLen;
-        
-        // On tente de capturer la frame directement suivante jusqu'au timeout
-        unsigned long startTime = millis();
-        while(millis() - startTime < responseTimeoutMs) {
-            Result result = captureFrame(checkFc ? expectedFc : 0, frame, &frameLen);
-            if(result == NOTHING_TO_DO) {
-                continue;
-            }
-            if(result != SUCCESS) {
-                return result;
-            }
-            memcpy(&msg, &frame[3], sizeof(T));
-            return Success(result.fc);
-        }
-
-        // Si on arrive ici, on a pas réussi à capturer la frame dans le temps imparti
-        return Error(ERR_TIMEOUT);
     }
 
     // Generic handler (internal usage only)
