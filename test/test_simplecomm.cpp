@@ -367,17 +367,28 @@ void test_timeout(void) {
     serial.reset();
     SimpleComm comm(&serial);
     
-    // Register the proto
     comm.registerRequest<SetPwmMsg>();
     
-    // Send a message that requires ACK but mock won't respond
+    // Désactiver l'auto-réponse
+    serial.disableAutoResponse();
+    
+    // Envoyer un message qui nécessite une réponse
     SetPwmMsg msg{.pin = 1, .freq = 1000};
     
-    // Désactiver la génération automatique de réponse dans le mock
-    serial.disableAutoResponse();  // Il faudra ajouter cette méthode
-    
-    // La réponse ne viendra jamais -> timeout
+    // Test 1: Pas de réponse du tout
     auto result = comm.sendMsgAck(msg);
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_TIMEOUT, result.status);
+    
+    // Test 2: Réponse partielle
+    uint8_t partialResponse[] = {
+        SimpleComm::START_OF_FRAME,
+        sizeof(SetPwmMsg) + SimpleComm::FRAME_OVERHEAD,
+        SetPwmMsg::fc | SimpleComm::FC_RESPONSE_BIT,
+        // Manque les données et le CRC
+    };
+    serial.injectData(partialResponse, sizeof(partialResponse));
+    
+    result = comm.sendMsgAck(msg);
     TEST_ASSERT_EQUAL(SimpleComm::ERR_TIMEOUT, result.status);
 }
 
@@ -763,6 +774,63 @@ void test_response_wrong_fc() {
 //     TEST_ASSERT_NOT_EQUAL(SimpleComm::SUCCESS, result.status);
 // }
 
+void test_busy_receiving() {
+    MockSerial serial;
+    serial.reset();
+    SimpleComm comm(&serial);
+    
+    // Enregistrer les protos nécessaires
+    comm.registerRequest<SetLedMsg>();
+    comm.registerRequest<SetPwmMsg>();
+    
+    // Préparer un message incomplet pour simuler une réception en cours
+    uint8_t partialFrame[] = {
+        SimpleComm::START_OF_FRAME,  // SOF
+        sizeof(SetLedMsg) + SimpleComm::FRAME_OVERHEAD,  // LEN
+        SetLedMsg::fc,  // FC
+        // On n'injecte pas tout le message pour simuler une réception partielle
+    };
+    
+    // Injecter le début de frame
+    serial.injectData(partialFrame, sizeof(partialFrame));
+    
+    // Premier poll() pour démarrer la capture
+    printf("\nStarting frame capture...\n");
+    auto result = comm.poll();
+    TEST_ASSERT_EQUAL(SimpleComm::NOTHING_TO_DO, result.status);
+    
+    // Essayer d'envoyer un message pendant la capture
+    printf("Trying to send while capturing...\n");
+    SetPwmMsg msg{.pin = 1, .freq = 1000};
+    result = comm.sendMsgAck(msg);
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_BUSY_RECEIVING, result.status);
+    
+    // Préparer la frame complète pour calculer le bon CRC
+    uint8_t completeFrame[SimpleComm::MAX_FRAME_SIZE];
+    memcpy(completeFrame, partialFrame, sizeof(partialFrame));
+    completeFrame[sizeof(partialFrame)] = 0x01;  // state = 1
+    
+    // Calculer le CRC sur la frame complète (sans le CRC)
+    uint8_t crc = SimpleComm::calculateCRC(completeFrame, sizeof(partialFrame) + 1);
+    
+    // Injecter le reste avec le bon CRC
+    uint8_t remainingFrame[] = {
+        0x01,  // state = 1
+        crc    // CRC calculé sur la frame complète
+    };
+    
+    serial.injectData(remainingFrame, sizeof(remainingFrame));
+    
+    // La capture doit se terminer correctement
+    printf("Completing frame capture...\n");
+    result = comm.poll();
+    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    
+    // Maintenant on peut renvoyer le message
+    printf("Sending after capture complete...\n");
+    result = comm.sendMsgAck(msg);
+    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+}
 
 int main(void) {
     UNITY_BEGIN();
@@ -797,6 +865,10 @@ int main(void) {
     // Tests spécifiques Request/Response
     RUN_TEST(test_response_fc_calculation);
     RUN_TEST(test_response_wrong_fc);
+    
+    // Tests de réception en cours
+    RUN_TEST(test_busy_receiving);
+
     
     return UNITY_END();
 } 

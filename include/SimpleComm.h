@@ -128,7 +128,7 @@ public:
         static_assert(T::type == ProtoType::REQUEST || 
                      T::type == ProtoType::FIRE_AND_FORGET || 
                      T::type == ProtoType::ACK_REQUIRED,
-                     "Wrong message type - use registerResponse() for RESPONSE types");
+                     "You tried to register a RESPONSE with registerRequest() - use registerResponse() for RESPONSE types");
         static_assert(T::fc != NULL_FC, "FC=0 is reserved/invalid");
         static_assert((T::fc & FC_RESPONSE_BIT) == 0, "Request FC must be <= 127");
         static_assert(T::name != nullptr, "Message must have a name");
@@ -185,7 +185,7 @@ public:
     // Type-safe send for FIRE_AND_FORGET messages
     template<typename T>
     Result sendMsg(const T& msg) {
-        static_assert(T::type == ProtoType::FIRE_AND_FORGET, "Wrong message type");
+        static_assert(T::type == ProtoType::FIRE_AND_FORGET, "Wrong message type, sendMsg() only works with FIRE_AND_FORGET messages");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert((T::fc & FC_RESPONSE_BIT) == 0, "FC must be <= 127");
         static_assert(T::fc != NULL_FC, "FC must not be NULL (0)");  // Check at compilation
@@ -195,7 +195,7 @@ public:
     // Send message and wait for acknowledgement (same message echoed back)
     template<typename T>
     Result sendMsgAck(const T& msg) {
-        static_assert(T::type == ProtoType::ACK_REQUIRED, "Wrong message type");
+        static_assert(T::type == ProtoType::ACK_REQUIRED, "Wrong message type, sendMsgAck() only works with ACK_REQUIRED messages");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert((T::fc & FC_RESPONSE_BIT) == 0, "FC must be <= 127");
         static_assert(T::fc != NULL_FC, "FC must not be NULL (0)");  // Check at compilation
@@ -240,7 +240,7 @@ public:
     // Send request and wait for specific response type
     template<typename REQ, typename RESP>
     Result sendRequest(const REQ& req, RESP& resp) {
-        static_assert(REQ::type == ProtoType::REQUEST, "Wrong message type");
+        static_assert(REQ::type == ProtoType::REQUEST, "Wrong message type, sendRequest() only works with REQUEST messages");
         static_assert(RESP::type == ProtoType::RESPONSE, "Response must be a RESPONSE type");
         static_assert(std::is_same<RESP, typename REQ::ResponseType>::value, "Response type doesn't match request's ResponseType");
         static_assert(std::is_standard_layout<REQ>::value, "Request type must be POD/standard-layout");
