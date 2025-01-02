@@ -140,9 +140,11 @@ private:
             printf("\n");
             
             // 3. Calculer le CRC sur le buffer modifié
-            uint8_t crc = SimpleComm::calculateCRC8(autoResponseBuffer, msgSize-1);
+            uint16_t crc = SimpleComm::calculateCRC16(autoResponseBuffer, msgSize-2);
+            autoResponseBuffer[msgSize-2] = (uint8_t)(crc >> 8);    // MSB
+            autoResponseBuffer[msgSize-1] = (uint8_t)(crc & 0xFF);  // LSB
+            
             printf("MOCK: Calculated CRC: %02X\n", crc);
-            autoResponseBuffer[msgSize-1] = crc;
             
             printf("MOCK: Final message:");
             for(size_t i = 0; i < msgSize; i++) {
@@ -150,7 +152,7 @@ private:
             }
             printf("\n");
             
-            autoResponseSize = msgSize;  // Important : utiliser la taille correcte
+            autoResponseSize = msgSize;
         }
         else if (lastMessageFC == GetStatusMsg::fc) {
             // Pour REQUEST/RESPONSE, on construit une réponse avec FC | FC_RESPONSE_BIT
@@ -161,8 +163,9 @@ private:
             autoResponseBuffer[1] = sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD;
             autoResponseBuffer[2] = StatusResponseMsg::fc | SimpleComm::FC_RESPONSE_BIT;  // FC de réponse
             memcpy(&autoResponseBuffer[3], &resp, sizeof(StatusResponseMsg));
-            autoResponseBuffer[sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD - 1] = 
-                SimpleComm::calculateCRC8(autoResponseBuffer, sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD - 1);
+            uint16_t crc = SimpleComm::calculateCRC16(autoResponseBuffer, sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD - 2);
+            autoResponseBuffer[sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD - 2] = (uint8_t)(crc >> 8);    // MSB
+            autoResponseBuffer[sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD - 1] = (uint8_t)(crc & 0xFF);  // LSB
             
             autoResponseSize = sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD;
         }
@@ -347,11 +350,13 @@ void test_on_receive(void) {
         sizeof(SetLedMsg) + SimpleComm::FRAME_OVERHEAD,  // LEN
         SetLedMsg::fc,               // FC
         1,                          // state = 1
+        0,                           // CRC (will be calculated below)
         0                           // CRC (will be calculated below)
     };
     
-    // Calculate CRC on the entire frame except the last byte
-    frame[sizeof(frame)-1] = SimpleComm::calculateCRC8(frame, sizeof(frame)-1);
+    uint16_t crc = SimpleComm::calculateCRC16(frame, sizeof(frame)-2);
+    frame[sizeof(frame)-2] = (uint8_t)(crc >> 8);    // MSB
+    frame[sizeof(frame)-1] = (uint8_t)(crc & 0xFF);  // LSB
     
     // Inject the frame
     serial.injectData(frame, sizeof(frame));
@@ -456,7 +461,7 @@ void test_error_cases(void) {
         sizeof(SetLedMsg) + SimpleComm::FRAME_OVERHEAD,
         SetLedMsg::fc,
         1,
-        0xFF  // Bad CRC
+        0xFF, 0xFF  // Bad CRC
     };
     serial.injectData(badCrcFrame, sizeof(badCrcFrame));
     result = comm.poll();
@@ -594,9 +599,11 @@ void test_malformed_frames(void) {
         SetLedMsg::fc,
         1,
         0,    // Données supplémentaires pour atteindre la taille annoncée
-        0  // CRC
+        0, 0  // CRC
     };
-    wrongLenFrame[4] = SimpleComm::calculateCRC8(wrongLenFrame, 4);
+    uint16_t crc = SimpleComm::calculateCRC16(wrongLenFrame, sizeof(wrongLenFrame)-2);
+    wrongLenFrame[sizeof(wrongLenFrame)-2] = (uint8_t)(crc >> 8); // MSB
+    wrongLenFrame[sizeof(wrongLenFrame)-1] = (uint8_t)(crc & 0xFF); // LSB
     serial.injectData(wrongLenFrame, sizeof(wrongLenFrame));
     auto result = comm.poll();
     TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_PROTO_MISMATCH, result.status);
@@ -617,9 +624,11 @@ void test_stress(void) {
         sizeof(SetLedMsg) + SimpleComm::FRAME_OVERHEAD,
         SetLedMsg::fc,
         1,
-        0  // CRC
+        0, 0  // CRC
     };
-    frame[4] = SimpleComm::calculateCRC8(frame, 4);
+    uint16_t crc = SimpleComm::calculateCRC16(frame, sizeof(frame)-2);
+    frame[sizeof(frame)-2] = (uint8_t)(crc >> 8); // MSB
+    frame[sizeof(frame)-1] = (uint8_t)(crc & 0xFF); // LSB
     
     // Inject two back-to-back frames
     serial.injectData(frame, sizeof(frame));
@@ -659,9 +668,11 @@ void test_stress(void) {
         sizeof(SetLedMsg) + SimpleComm::FRAME_OVERHEAD,
         SetLedMsg::fc,
         SimpleComm::START_OF_FRAME,  // SOF in the data - perfectly valid !
-        0  // CRC
+        0, 0  // CRC
     };
-    frameWithSOF[4] = SimpleComm::calculateCRC8(frameWithSOF, 4);
+    crc = SimpleComm::calculateCRC16(frameWithSOF, sizeof(frameWithSOF)-2);
+    frameWithSOF[sizeof(frameWithSOF)-2] = (uint8_t)(crc >> 8); // MSB
+    frameWithSOF[sizeof(frameWithSOF)-1] = (uint8_t)(crc & 0xFF); // LSB
     
     printf("\nTEST: Injecting normal frame\n");
     serial.injectData(frame, sizeof(frame));
@@ -811,12 +822,13 @@ void test_busy_receiving() {
     completeFrame[sizeof(partialFrame)] = 0x01;  // state = 1
     
     // Calculer le CRC sur la frame complète (sans le CRC)
-    uint8_t crc = SimpleComm::calculateCRC8(completeFrame, sizeof(partialFrame) + 1);
-    
+    uint16_t crc = SimpleComm::calculateCRC16(completeFrame, sizeof(partialFrame) + 1);
+
     // Injecter le reste avec le bon CRC
     uint8_t remainingFrame[] = {
         0x01,  // state = 1
-        crc    // CRC calculé sur la frame complète
+        (uint8_t)(crc >> 8),  // MSB
+        (uint8_t)(crc & 0xFF)  // LSB
     };
     
     serial.injectData(remainingFrame, sizeof(remainingFrame));
@@ -859,9 +871,11 @@ void test_request_during_response_wait() {
         sizeof(SetLedMsg) + SimpleComm::FRAME_OVERHEAD,
         SetLedMsg::fc,
         0x01,  // state = 1
-        0x00   // CRC à calculer
+        0, 0   // CRC à calculer
     };
-    incomingRequest[4] = SimpleComm::calculateCRC8(incomingRequest, 4);
+    uint16_t crc = SimpleComm::calculateCRC16(incomingRequest, sizeof(incomingRequest)-2);
+    incomingRequest[sizeof(incomingRequest)-2] = (uint8_t)(crc >> 8); // MSB
+    incomingRequest[sizeof(incomingRequest)-1] = (uint8_t)(crc & 0xFF); // LSB
     
     printf("Injecting LED request while waiting for status response...\n");
     serial.injectData(incomingRequest, sizeof(incomingRequest));
@@ -878,9 +892,11 @@ void test_request_during_response_wait() {
         StatusResponseMsg::fc | SimpleComm::FC_RESPONSE_BIT,
         0x01,  // state = 1
         0x00, 0x00, 0x00, 0x00,  // uptime = 0
-        0x00   // CRC à calculer
+        0, 0   // CRC à calculer
     };
-    lateResponse[8] = SimpleComm::calculateCRC8(lateResponse, 8);
+    crc = SimpleComm::calculateCRC16(lateResponse, sizeof(lateResponse)-2);
+    lateResponse[sizeof(lateResponse)-2] = (uint8_t)(crc >> 8); // MSB
+    lateResponse[sizeof(lateResponse)-1] = (uint8_t)(crc & 0xFF); // LSB
     
     printf("Injecting late status response...\n");
     serial.injectData(lateResponse, sizeof(lateResponse));
@@ -916,9 +932,11 @@ void test_duplicate_response() {
         StatusResponseMsg::fc | SimpleComm::FC_RESPONSE_BIT,
         0x01,  // state = 1
         0x00, 0x10, 0x00, 0x00,  // uptime = 4096
-        0x00   // CRC à calculer
+        0, 0   // CRC à calculer
     };
-    validResponse[8] = SimpleComm::calculateCRC8(validResponse, 8);
+    uint16_t crc = SimpleComm::calculateCRC16(validResponse, sizeof(validResponse)-2);
+    validResponse[sizeof(validResponse)-2] = (uint8_t)(crc >> 8); // MSB
+    validResponse[sizeof(validResponse)-1] = (uint8_t)(crc & 0xFF); // LSB
     
     // 3. Envoyer la requête et injecter la première réponse
     auto result = comm.sendRequest(statusReq, statusResp);
@@ -942,9 +960,11 @@ void test_duplicate_response() {
         StatusResponseMsg::fc | SimpleComm::FC_RESPONSE_BIT,
         0x02,  // state différent
         0x00, 0x20, 0x00, 0x00,  // uptime différent
-        0x00   // CRC à calculer
+        0, 0   // CRC à calculer
     };
-    duplicateResponse[8] = SimpleComm::calculateCRC8(duplicateResponse, 8);
+    crc = SimpleComm::calculateCRC16(duplicateResponse, sizeof(duplicateResponse)-2);
+    duplicateResponse[sizeof(duplicateResponse)-2] = (uint8_t)(crc >> 8); // MSB
+    duplicateResponse[sizeof(duplicateResponse)-1] = (uint8_t)(crc & 0xFF); // LSB
     
     printf("Injecting different duplicate response...\n");
     serial.injectData(duplicateResponse, sizeof(duplicateResponse));

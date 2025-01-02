@@ -63,7 +63,7 @@ public:
     // Frame format
     static constexpr inline uint8_t START_OF_FRAME = 0xAA;
     static constexpr inline uint8_t FRAME_HEADER_SIZE = 2;  // SOF + LEN
-    static constexpr inline size_t FRAME_OVERHEAD = 4;      // SOF + LEN + FC + CRC
+    static constexpr inline size_t FRAME_OVERHEAD = 5;      // SOF + LEN + FC + CRC*2
     // FC constants
     static constexpr inline uint8_t NULL_FC = 0;  // FC=0 reserved/invalid
     static constexpr inline uint8_t MAX_PROTOS = 10;  // Maximum number of protos
@@ -458,7 +458,9 @@ private:
         frame[1] = frameSize;
         frame[2] = T::fc;
         memcpy(&frame[3], &msg, sizeof(T));
-        frame[frameSize-1] = calculateCRC8(frame, frameSize-1);
+        uint16_t crc = calculateCRC16(frame, frameSize-2);
+        frame[frameSize-2] = (uint8_t)(crc >> 8);    // MSB
+        frame[frameSize-1] = (uint8_t)(crc & 0xFF);  // LSB
 
         // Send frame (now we are sure we have enough space)
         serial->write(frame, frameSize);
@@ -529,8 +531,8 @@ private:
         }
 
         // Vérifier CRC
-        uint8_t receivedCRC = tempFrame[frameSize-1];
-        uint8_t calculatedCRC = calculateCRC8(tempFrame, frameSize-1);
+        uint16_t receivedCRC = ((uint16_t)tempFrame[frameSize-2] << 8) | tempFrame[frameSize-1];
+        uint16_t calculatedCRC = calculateCRC16(tempFrame, frameSize-2);
 
         if (receivedCRC != calculatedCRC) {
             frameCapturePending = false;
