@@ -148,7 +148,13 @@ public:
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert(sizeof(T) + FRAME_OVERHEAD <= MAX_FRAME_SIZE, "Message too large");
 
-        // We replace the FC by its complement (FC | 0x80)
+        // Vérifier qu'une requête avec ce FC est enregistrée
+        ProtoStore* requestProto = findProto(T::fc);  // Chercher avec le FC original
+        if (requestProto == nullptr) {
+            return Error(ERR_INVALID_FC, T::fc);  // Pas de requête correspondante
+        }
+
+        // On remplace le FC par son complément (FC | 0x80)
         return registerProtoInternal<T>(T::fc | FC_RESPONSE_BIT);
     }
 
