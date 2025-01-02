@@ -56,7 +56,30 @@ struct MinimalMsg {
     uint8_t dummy;  // Minimal message of one byte
 };
 
+// Structures pour les tests de FC Request/Response
+struct TestResponseMsg;  // Forward declaration nécessaire car TestRequestMsg y fait référence
 
+struct TestRequestMsg {
+    static constexpr ProtoType type = ProtoType::REQUEST;
+    static constexpr const char* name = "TEST_REQ";
+    static constexpr uint8_t fc = 42;  // FC arbitraire entre 1-127
+    using ResponseType = TestResponseMsg;  // Utilise TestResponseMsg qui doit être déclaré avant
+    uint8_t data;
+} __attribute__((packed));
+
+struct TestResponseMsg {
+    static constexpr ProtoType type = ProtoType::RESPONSE;
+    static constexpr const char* name = "TEST_RESP";
+    static constexpr uint8_t fc = 42;  // Même FC que la requête
+    uint8_t data;
+} __attribute__((packed));
+
+struct WrongResponseMsg {
+    static constexpr ProtoType type = ProtoType::RESPONSE;
+    static constexpr const char* name = "WRONG_RESP";
+    static constexpr uint8_t fc = 43;  // Different de TestRequestMsg::fc !
+    uint8_t data;
+} __attribute__((packed));
 
 // Mock for tests
 class MockSerial : public HardwareSerial {
@@ -75,6 +98,7 @@ private:
     uint8_t autoResponseBuffer[BUFFER_SIZE];
     size_t autoResponseSize;
     int availableForWriteValue;
+    bool autoResponseEnabled = true;  // Par défaut on répond
 
     void prepareAutoResponse() {
         // We don't prepare auto-response for FIRE_AND_FORGET messages
@@ -83,18 +107,21 @@ private:
         }
         
         if (lastMessageFC == SetPwmMsg::fc) {
-            // For ACK_REQUIRED, we return exactly the same message
+            // Pour ACK_REQUIRED, on retourne le même message avec FC | FC_RESPONSE_BIT
             memcpy(autoResponseBuffer, txBuffer, txCount);
+            autoResponseBuffer[2] |= SimpleComm::FC_RESPONSE_BIT;  // Modifier le FC de la réponse
+            // Il faut recalculer le CRC car on a modifié le FC !
+            autoResponseBuffer[txCount-1] = SimpleComm::calculateCRC(autoResponseBuffer, txCount-1);
             autoResponseSize = txCount;
         }
         else if (lastMessageFC == GetStatusMsg::fc) {
-            // For REQUEST/RESPONSE, we build a response
+            // Pour REQUEST/RESPONSE, on construit une réponse avec FC | FC_RESPONSE_BIT
             StatusResponseMsg resp{.state = 1, .uptime = 1000};
             
             // Build the response frame
             autoResponseBuffer[0] = SimpleComm::START_OF_FRAME;
             autoResponseBuffer[1] = sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD;
-            autoResponseBuffer[2] = StatusResponseMsg::fc;
+            autoResponseBuffer[2] = StatusResponseMsg::fc | SimpleComm::FC_RESPONSE_BIT;  // FC de réponse
             memcpy(&autoResponseBuffer[3], &resp, sizeof(StatusResponseMsg));
             autoResponseBuffer[sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD - 1] = 
                 SimpleComm::calculateCRC(autoResponseBuffer, sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD - 1);
@@ -119,6 +146,9 @@ public:
     }
 
     size_t write(const uint8_t* buffer, size_t size) override {
+        printf("MOCK: Writing frame, size=%zu\n", size);
+        printf("MOCK: FC=%d (0x%02X)\n", buffer[2], buffer[2]);
+        
         // Store the message
         size_t written = 0;
         while (written < size && txCount < BUFFER_SIZE) {
@@ -128,10 +158,15 @@ public:
         // Extract the FC (3rd byte of the frame)
         if (size >= 3) {
             lastMessageFC = buffer[2];
+            printf("MOCK: Stored lastMessageFC=%d (0x%02X)\n", lastMessageFC, lastMessageFC);
             
-            // Prepare a response only for messages that expect one
-            if (lastMessageFC == SetPwmMsg::fc || lastMessageFC == GetStatusMsg::fc) {
+            // Prepare a response only for messages that expect one AND if enabled
+            if (autoResponseEnabled && 
+                (lastMessageFC == SetPwmMsg::fc || lastMessageFC == GetStatusMsg::fc)) {
                 prepareAutoResponse();
+                
+                printf("MOCK: Prepared auto-response, size=%zu\n", autoResponseSize);
+                printf("MOCK: Response FC=%d (0x%02X)\n", autoResponseBuffer[2], autoResponseBuffer[2]);
                 
                 // Copy auto-response into the reception buffer
                 memcpy(rxBuffer, autoResponseBuffer, autoResponseSize);
@@ -202,35 +237,42 @@ public:
         availableForWriteValue = value;
         return true;
     }
+
+    void disableAutoResponse() { autoResponseEnabled = false; }
+    void enableAutoResponse() { autoResponseEnabled = true; }
 };
 
+// Variable globale pour le mock (accessible dans setUp/tearDown)
+static MockSerial* currentMock = nullptr;
+
 void setUp(void) {
-    TimeManager::reset();  // Reset time at the beginning of each test
+    TimeManager::reset();
 }
 
 void tearDown(void) {
-    // Cleanup after each test
 }
 
 void test_register_proto(void) {
     MockSerial serial;
+    serial.reset();  // Stockage du mock
     SimpleComm comm(&serial);
 
     // Test 1: Normal registration
-    auto result = comm.registerProto<SetLedMsg>();
+    auto result = comm.registerRequest<SetLedMsg>();
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
 
     // Test 2: Double registration
-    result = comm.registerProto<SetLedMsg>();
+    result = comm.registerRequest<SetLedMsg>();
     TEST_ASSERT_EQUAL(SimpleComm::ERR_FC_ALREADY_REGISTERED, result.status);
 }
 
 void test_send_msg(void) {
     MockSerial serial;
+    serial.reset();  // Stockage du mock
     SimpleComm comm(&serial);
     
     // Register the proto first
-    comm.registerProto<SetLedMsg>();
+    comm.registerRequest<SetLedMsg>();
     
     // Normal send test
     SetLedMsg msg{.state = 1};
@@ -245,12 +287,13 @@ void test_send_msg(void) {
 
 void test_on_receive(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
     bool handlerCalled = false;
     
     // Register the proto and the handler
-    comm.registerProto<SetLedMsg>();
+    comm.registerRequest<SetLedMsg>();
     comm.onReceive<SetLedMsg>([&handlerCalled](const SetLedMsg& msg) {
         handlerCalled = true;
         TEST_ASSERT_EQUAL(1, msg.state);
@@ -279,20 +322,26 @@ void test_on_receive(void) {
 
 void test_timeout(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
-    // Inject an incomplete frame start
-    uint8_t start = SimpleComm::START_OF_FRAME;
-    serial.injectData(&start, 1);
+    // Register the proto
+    comm.registerRequest<SetPwmMsg>();
     
-    // The timeout should naturally occur because each byte read
-    // increments the time
-    auto result = comm.poll();
+    // Send a message that requires ACK but mock won't respond
+    SetPwmMsg msg{.pin = 1, .freq = 1000};
+    
+    // Désactiver la génération automatique de réponse dans le mock
+    serial.disableAutoResponse();  // Il faudra ajouter cette méthode
+    
+    // La réponse ne viendra jamais -> timeout
+    auto result = comm.sendMsgAck(msg);
     TEST_ASSERT_EQUAL(SimpleComm::ERR_TIMEOUT, result.status);
 }
 
 void test_send_msg_with_ack(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
     // Register the proto
@@ -306,6 +355,7 @@ void test_send_msg_with_ack(void) {
 
 void test_request_response(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
     // Register the protos
@@ -332,6 +382,7 @@ void test_request_response(void) {
 
 void test_error_cases(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
     // Test short frame
@@ -344,7 +395,7 @@ void test_error_cases(void) {
     serial.reset();
     
     // Register the proto for the CRC test
-    comm.registerProto<SetLedMsg>();
+    comm.registerRequest<SetLedMsg>();
     
     // Test bad CRC
     uint8_t badCrcFrame[] = {
@@ -361,65 +412,67 @@ void test_error_cases(void) {
 
 void test_buffer_limits(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
     // Test with a message at the limit (must pass)
-    auto result = comm.registerProto<BorderlineMsg>();
+    auto result = comm.registerRequest<BorderlineMsg>();
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
     
     // Test write buffer full
-    comm.registerProto<SetLedMsg>();  // Must register the proto first !
+    comm.registerRequest<SetLedMsg>();  // Must register the proto first !
     serial.setAvailableForWrite(2);   // Simulate almost full buffer
     SetLedMsg msg{.state = 1};
     result = comm.sendMsg(msg);
     TEST_ASSERT_EQUAL(SimpleComm::ERR_OVERFLOW, result.status);
 }
 
-void test_timeouts(void) {
+void test_set_timeout(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
     // Test custom timeout
-    comm.setInterbyteTimeout(100);
     comm.setResponseTimeout(500);
-    TEST_ASSERT_EQUAL(100, comm.getInterbyteTimeout());
     TEST_ASSERT_EQUAL(500, comm.getResponseTimeout());
     
     // Test invalid timeout (0)
-    TEST_ASSERT_FALSE(comm.setInterbyteTimeout(0));
     TEST_ASSERT_FALSE(comm.setResponseTimeout(0));
 }
 
 void test_name_collisions(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
-    comm.registerProto<SetLedMsg>();
-    auto result = comm.registerProto<DuplicateNameMsg>();
+    comm.registerRequest<SetLedMsg>();
+    auto result = comm.registerRequest<DuplicateNameMsg>();
     TEST_ASSERT_EQUAL(SimpleComm::ERR_NAME_ALREADY_REGISTERED, result.status);
 }
 
 void test_proto_mismatch(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
-    comm.registerProto<SetLedMsg>();
+    comm.registerRequest<SetLedMsg>();
     
     // Try to use a message with the same FC but a different name
     SameFcMsg msg{.value = 1};
     auto result = comm.sendMsg(msg);
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_PROTO_MISMATCH, result.status);
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_SND_PROTO_MISMATCH, result.status);
 }
 
 void test_handler_wrong_name(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
-    comm.registerProto<SetLedMsg>();
+    comm.registerRequest<SetLedMsg>();
     
     // Try to register a handler for a message with the same FC but different name
     auto result = comm.onReceive<SameFcMsg>([](const SameFcMsg&) {});
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_PROTO_MISMATCH, result.status);
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_REG_PROTO_MISMATCH, result.status);
 }
 
 void test_invalid_names(void) {
@@ -428,6 +481,7 @@ void test_invalid_names(void) {
 
 void test_complex_data(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
     ComplexMsg msg = {
@@ -436,7 +490,7 @@ void test_complex_data(void) {
         .flags = 0xAA
     };
     
-    comm.registerProto<ComplexMsg>();
+    comm.registerRequest<ComplexMsg>();
     
     // Test send
     auto result = comm.sendMsg(msg);
@@ -454,10 +508,11 @@ void test_complex_data(void) {
 
 void test_size_limits(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
     // Test message minimal
-    auto result = comm.registerProto<MinimalMsg>();
+    auto result = comm.registerRequest<MinimalMsg>();
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
     
     // Test with different buffer sizes available
@@ -473,10 +528,11 @@ void test_size_limits(void) {
 
 void test_malformed_frames(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
     // Must register the proto first !
-    comm.registerProto<SetLedMsg>();
+    comm.registerRequest<SetLedMsg>();
     
     // Frame with wrong length
     uint8_t wrongLenFrame[] = {
@@ -484,31 +540,23 @@ void test_malformed_frames(void) {
         sizeof(SetLedMsg) + SimpleComm::FRAME_OVERHEAD + 1,  // Too long
         SetLedMsg::fc,
         1,
+        0,    // Données supplémentaires pour atteindre la taille annoncée
         0  // CRC
     };
     wrongLenFrame[4] = SimpleComm::calculateCRC(wrongLenFrame, 4);
     serial.injectData(wrongLenFrame, sizeof(wrongLenFrame));
     auto result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_PROTO_MISMATCH, result.status);
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_PROTO_MISMATCH, result.status);
     
     serial.reset();  // Important to reset between tests !
-    
-    // Truncated frame
-    uint8_t truncatedFrame[] = {
-        SimpleComm::START_OF_FRAME,
-        sizeof(SetLedMsg) + SimpleComm::FRAME_OVERHEAD,
-        SetLedMsg::fc
-    };
-    serial.injectData(truncatedFrame, sizeof(truncatedFrame));
-    result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_TIMEOUT, result.status);
 }
 
 void test_stress(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
-    comm.registerProto<SetLedMsg>();
+    comm.registerRequest<SetLedMsg>();
     
     // Test 1: Back-to-back frames
     uint8_t frame[] = {
@@ -525,8 +573,12 @@ void test_stress(void) {
     serial.injectData(frame, sizeof(frame));
     
     // Both must be processed
+    uint8_t captured[SimpleComm::MAX_FRAME_SIZE];
+    size_t capturedLen;
+    
     auto result = comm.poll();
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    
     result = comm.poll();
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
     
@@ -558,26 +610,34 @@ void test_stress(void) {
     };
     frameWithSOF[4] = SimpleComm::calculateCRC(frameWithSOF, 4);
     
-    serial.injectData(frame, sizeof(frame));          // Normal frame
-    serial.injectData(frameWithSOF, sizeof(frameWithSOF));  // Frame with SOF in the data
-    serial.injectData(frame, sizeof(frame));          // Normal frame
+    printf("\nTEST: Injecting normal frame\n");
+    serial.injectData(frame, sizeof(frame));
+
+    printf("\nTEST: Injecting frame with SOF in data\n");
+    serial.injectData(frameWithSOF, sizeof(frameWithSOF));
+
+    printf("\nTEST: Injecting normal frame\n");
+    serial.injectData(frame, sizeof(frame));
     
     // All frames must pass
     result = comm.poll();
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    
     result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);  // The frame with SOF must pass !
+    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    
     result = comm.poll();
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
 }
 
 void test_mixed_message_types(void) {
     MockSerial serial;
+    serial.reset();
     SimpleComm comm(&serial);
     
     // Register different types of messages
-    comm.registerProto<SetLedMsg>();        // FIRE_AND_FORGET
-    comm.registerProto<SetPwmMsg>();        // ACK_REQUIRED
+    comm.registerRequest<SetLedMsg>();        // FIRE_AND_FORGET
+    comm.registerRequest<SetPwmMsg>();        // ACK_REQUIRED
     comm.registerRequest<GetStatusMsg>();     // REQUEST
     comm.registerResponse<StatusResponseMsg>(); // RESPONSE
     
@@ -597,24 +657,98 @@ void test_mixed_message_types(void) {
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
 }
 
+void test_response_fc_calculation() {
+    MockSerial serial;
+    serial.reset();
+    SimpleComm comm(&serial);
+    
+    // Enregistrer la paire request/response
+    auto result = comm.registerRequest<TestRequestMsg>();
+    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    
+    result = comm.registerResponse<TestResponseMsg>();
+    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    
+    const auto* proto = comm.getProtoStore(TestRequestMsg::fc | SimpleComm::FC_RESPONSE_BIT);
+    TEST_ASSERT_NOT_NULL(proto);
+    TEST_ASSERT_EQUAL(TestResponseMsg::fc | SimpleComm::FC_RESPONSE_BIT, proto->fc);
+}
+
+void test_response_wrong_fc() {
+    MockSerial serial;
+    serial.reset();
+    SimpleComm comm(&serial);
+    
+    // La requête doit passer
+    auto result = comm.registerRequest<TestRequestMsg>();
+    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    
+    // La réponse avec mauvais FC doit être rejetée
+    result = comm.registerResponse<WrongResponseMsg>();
+    TEST_ASSERT_NOT_EQUAL(SimpleComm::SUCCESS, result.status);
+}
+
+// Those tests are intentionally commented out because they MUST fail at compilation
+// They demonstrate that the library prevents compilation:
+// 1. Registering a response as a request
+// 2. Registering a request as a response
+//
+// void test_response_registered_as_request() {
+//     MockSerial serial;
+//     serial.reset();
+//     SimpleComm comm(&serial);
+//
+//     // This test MUST fail at compilation because we cannot
+//     // register a RESPONSE as a REQUEST (checked by static_assert)
+//     auto result = comm.registerRequest<TestResponseMsg>();
+//     TEST_ASSERT_NOT_EQUAL(SimpleComm::SUCCESS, result.status);
+// }
+//
+// void test_request_registered_as_response() {
+//     MockSerial serial;
+//     serial.reset();   
+//     SimpleComm comm(&serial);
+//
+//     // This test MUST fail at compilation because we cannot
+//     // register a REQUEST as a RESPONSE (checked by static_assert)
+//     auto result = comm.registerResponse<TestRequestMsg>();
+//     TEST_ASSERT_NOT_EQUAL(SimpleComm::SUCCESS, result.status);
+// }
+
+
 int main(void) {
     UNITY_BEGIN();
+    
+    // Tests d'enregistrement et validation des protos
     RUN_TEST(test_register_proto);
-    RUN_TEST(test_send_msg);
-    RUN_TEST(test_on_receive);
-    RUN_TEST(test_timeout);
-    RUN_TEST(test_send_msg_with_ack);
-    RUN_TEST(test_request_response);
-    RUN_TEST(test_error_cases);
-    RUN_TEST(test_buffer_limits);
-    RUN_TEST(test_timeouts);
     RUN_TEST(test_name_collisions);
     RUN_TEST(test_proto_mismatch);
     RUN_TEST(test_handler_wrong_name);
-    RUN_TEST(test_complex_data);
+    
+    // Tests de communication basique
+    RUN_TEST(test_send_msg);
+    RUN_TEST(test_on_receive);
+    RUN_TEST(test_send_msg_with_ack);
+    RUN_TEST(test_request_response);
+    
+    // Tests de gestion des erreurs et limites
+    RUN_TEST(test_error_cases);
+    RUN_TEST(test_buffer_limits);
+    RUN_TEST(test_timeout);
+    RUN_TEST(test_set_timeout);
     RUN_TEST(test_size_limits);
     RUN_TEST(test_malformed_frames);
+    
+    // Tests de données
+    RUN_TEST(test_complex_data);
+    
+    // Tests de robustesse
     RUN_TEST(test_stress);
     RUN_TEST(test_mixed_message_types);
+    
+    // Tests spécifiques Request/Response
+    RUN_TEST(test_response_fc_calculation);
+    RUN_TEST(test_response_wrong_fc);
+    
     return UNITY_END();
 } 

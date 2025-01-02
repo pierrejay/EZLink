@@ -94,7 +94,12 @@ public:
         ERR_INVALID_FC,     // FC not registered
         ERR_INVALID_SOF,    // Invalid SOF
         ERR_INVALID_LEN,    // Invalid length
-        ERR_PROTO_MISMATCH, // Inconsistency between expected and received proto
+        ERR_RCV_PROTO_MISMATCH, // Message received but inconsistent with expected proto
+        ERR_RCV_ACK_MISMATCH, // ACK received but inconsistent with sent message
+        ERR_RCV_RESP_MISMATCH, // Response received but inconsistent with expected response
+        ERR_SND_PROTO_MISMATCH, // Inconsistency between expected and sent proto
+        ERR_REG_PROTO_MISMATCH, // Inconsistency between expected and registered proto
+        ERR_RCV_UNEXPECTED_RESPONSE, // Received a response but not expected
         ERR_TIMEOUT,        // No response
         ERR_CRC,           // Invalid CRC
         ERR_OVERFLOW,       // Buffer too small
@@ -138,7 +143,7 @@ public:
         static_assert(T::type == ProtoType::RESPONSE, 
                      "Wrong message type - registerResponse() only works with RESPONSE types");
         static_assert(T::fc != NULL_FC, "FC=0 is reserved/invalid");
-        static_assert((T::fc & FC_RESPONSE_BIT) == FC_RESPONSE_BIT, "Response FC must be >= 128");
+        static_assert((T::fc & FC_RESPONSE_BIT) == 0, "Response FC must be <= 127");
         static_assert(T::name != nullptr, "Message must have a name");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert(sizeof(T) + FRAME_OVERHEAD <= MAX_FRAME_SIZE, "Message too large");
@@ -176,7 +181,7 @@ public:
     Result sendMsg(const T& msg) {
         static_assert(T::type == ProtoType::FIRE_AND_FORGET, "Wrong message type");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert((REQ::fc & FC_RESPONSE_BIT) == 0, "FC must be <= 127");
+        static_assert((T::fc & FC_RESPONSE_BIT) == 0, "FC must be <= 127");
         static_assert(T::fc != NULL_FC, "FC must not be NULL (0)");  // Check at compilation
         return sendMsgInternal(msg);
     }
@@ -186,7 +191,7 @@ public:
     Result sendMsgAck(const T& msg) {
         static_assert(T::type == ProtoType::ACK_REQUIRED, "Wrong message type");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert((REQ::fc & FC_RESPONSE_BIT) == 0, "FC must be <= 127");
+        static_assert((T::fc & FC_RESPONSE_BIT) == 0, "FC must be <= 127");
         static_assert(T::fc != NULL_FC, "FC must not be NULL (0)");  // Check at compilation
         
         // Send message first
@@ -198,7 +203,6 @@ public:
         // Wait for echo with timeout
         uint8_t frame[MAX_FRAME_SIZE];
         size_t frameLen;
-        T echo;
         
         unsigned long startTime = millis();
         while(millis() - startTime < responseTimeoutMs) {
@@ -210,10 +214,14 @@ public:
                 return result;
             }
             
-            // Frame capturée, on vérifie qu'elle correspond
-            memcpy(&echo, &frame[3], sizeof(T));
-            if(memcmp(&msg, &echo, sizeof(T)) != 0) {
-                return Error(ERR_PROTO_MISMATCH, T::fc);
+            // Vérifier que la réponse fait la même taille que la requête
+            if(frameLen - FRAME_OVERHEAD != sizeof(T)) {
+                return Error(ERR_RCV_ACK_MISMATCH);
+            }
+            
+            // Vérifier que le contenu est identique
+            if(memcmp(&frame[3], &msg, sizeof(T)) != 0) {
+                return Error(ERR_RCV_ACK_MISMATCH);
             }
             
             return Success(T::fc);
@@ -233,7 +241,7 @@ public:
         static_assert(std::is_standard_layout<RESP>::value, "Response type must be POD/standard-layout");
         static_assert(REQ::fc != NULL_FC, "FC must not be NULL (0)");
         static_assert((REQ::fc & FC_RESPONSE_BIT) == 0, "Request FC must be <= 127");
-        static_assert((RESP::fc & FC_RESPONSE_BIT) == FC_RESPONSE_BIT, "Response FC must be >= 128");
+        static_assert(REQ::fc == RESP::fc, "Response FC must match Request FC"); 
         
         // Send request
         Result result = sendMsgInternal(req);
@@ -247,12 +255,17 @@ public:
         
         unsigned long startTime = millis();
         while(millis() - startTime < responseTimeoutMs) {
-            result = captureFrame(RESP::fc, frame, &frameLen);
+            result = captureFrame(RESP::fc | FC_RESPONSE_BIT, frame, &frameLen);  // Attendre le FC avec bit de réponse
             if(result == NOTHING_TO_DO) {
                 continue;
             }
             if(result != SUCCESS) {
                 return result;
+            }
+            
+            // Vérifier que la réponse fait la bonne taille
+            if(frameLen - FRAME_OVERHEAD != sizeof(RESP)) {
+                return Error(ERR_RCV_RESP_MISMATCH);
             }
             
             // Frame capturée, on la copie dans la réponse
@@ -264,10 +277,13 @@ public:
         return Error(ERR_TIMEOUT);
     }
 
-    // Process received messages
+    // Process received messages with optional frame capture
     Result poll() {
-        // Tente de capturer une frame
-        Result result = captureFrame();
+        uint8_t rxBuffer[MAX_FRAME_SIZE];  // Buffer local
+        size_t frameLen;
+
+        // Tente de capturer une frame dans le buffer local
+        Result result = captureFrame(0, rxBuffer, &frameLen);
         
         // Si la capture n'a pas réussi, on retourne l'erreur obtenue
         if(result != SUCCESS && result != NOTHING_TO_DO) {
@@ -276,15 +292,24 @@ public:
         
         // Si la capture a réussi, vérifier que ce n'est pas une réponse
         if(result == SUCCESS) {
+            
             // Rejeter les réponses (bit 7 setté)
             if((result.fc & FC_RESPONSE_BIT) != 0) {
-                return Error(ERR_INVALID_FC, result.fc);
+                return Error(ERR_RCV_UNEXPECTED_RESPONSE, result.fc);
             }
 
-            // Appeler le handler si enregistré
+            // Trouver le proto et vérifier la taille
             ProtoStore* proto = findProto(result.fc);
-            if(proto && proto->callback) {
-                proto->callback(&rxBuffer[3]);
+            if(proto) {
+                // Vérifier que la taille correspond au proto
+                if(frameLen - FRAME_OVERHEAD != proto->size) {
+                    return Error(ERR_RCV_PROTO_MISMATCH, result.fc);
+                }
+                
+                // Appeler le handler si enregistré
+                if(proto->callback) {
+                    proto->callback(&rxBuffer[3]);
+                }
             }
             return result;
         }
@@ -320,8 +345,8 @@ public:
         return crc;
     }
 
-private:
 
+private:
     // Structure to store message prototypes
     struct ProtoStore {
         ProtoType type = ProtoType::FIRE_AND_FORGET;
@@ -335,7 +360,6 @@ private:
     HardwareSerial* serial;
     uint32_t responseTimeoutMs;   // Timeout for waiting for a response
     ProtoStore protos[MAX_PROTOS];  // Indexed by FC
-    uint8_t rxBuffer[MAX_FRAME_SIZE];
     bool frameCapturePending = false;  // État de la capture de frame
 
 
@@ -396,7 +420,7 @@ private:
             return Error(ERR_INVALID_FC, T::fc);
         }
         if (!strEqual(proto->name, T::name)) {
-            return Error(ERR_PROTO_MISMATCH, T::fc);
+            return Error(ERR_SND_PROTO_MISMATCH, T::fc);
         }
         
         // Check if we have enough space
@@ -438,10 +462,11 @@ private:
                 return NoData();
             }
             
-            uint8_t byte = serial->read();
-            if(byte != START_OF_FRAME) {
+            if(serial->peek() != START_OF_FRAME) {
+                flushRxBufferUntilSOF(); // SOF invalide, on vide le buffer
                 return Error(ERR_INVALID_SOF);
             }
+            uint8_t byte = serial->read();  // Maintenant on peut consommer le SOF
             frameCapturePending = true;
         }
 
@@ -452,7 +477,8 @@ private:
 
         // Vérifier LEN sans le consommer
         uint8_t frameSize = serial->peek();
-        if(frameSize < FRAME_OVERHEAD) {
+
+        if(frameSize < FRAME_OVERHEAD || frameSize > MAX_FRAME_SIZE) {
             frameCapturePending = false;
             flushRxBufferUntilSOF(); // Frame invalide, on vide le buffer
             return Error(ERR_INVALID_LEN);
@@ -485,17 +511,7 @@ private:
             return Error(ERR_INVALID_FC, fc);
         }
 
-        // Valider taille proto si FC attendu
-        if(expectedFc > 0) {
-            ProtoStore* proto = findProto(fc);
-            if(!proto || proto->size != frameSize - FRAME_OVERHEAD) {
-                frameCapturePending = false;
-                flushRxBufferUntilSOF(); // Frame invalide, on vide le buffer
-                return Error(ERR_PROTO_MISMATCH, fc);
-            }
-        }
-
-        // Valider CRC
+        // Valider CRC et retourner la frame
         uint8_t receivedCRC = tempFrame[frameSize-1];
         uint8_t calculatedCRC = calculateCRC(tempFrame, frameSize-1);
         if(receivedCRC != calculatedCRC) {
@@ -525,7 +541,7 @@ private:
             return Error(ERR_INVALID_FC, T::fc);
         }
         if (!strEqual(proto->name, T::name)) {
-            return Error(ERR_PROTO_MISMATCH, T::fc);
+            return Error(ERR_REG_PROTO_MISMATCH, T::fc);
         }
         
         proto->callback = [handler](const void* data) {
@@ -559,5 +575,18 @@ private:
     static bool strEqual(const char* a, const char* b) {
         return strcmp(a, b) == 0;
     }
+
+#ifdef UNIT_TESTING
+public:
+    // Méthode pour les tests uniquement
+    const ProtoStore* getProtoStore(uint8_t fc) const {
+        for(size_t i = 0; i < MAX_PROTOS; i++) {
+            if(protos[i].fc == fc) {
+                return &protos[i];
+            }
+        }
+        return nullptr;
+    }
+#endif
 
 };
