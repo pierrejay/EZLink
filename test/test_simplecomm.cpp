@@ -140,7 +140,7 @@ private:
             printf("\n");
             
             // 3. Calculer le CRC sur le buffer modifié
-            uint8_t crc = SimpleComm::calculateCRC(autoResponseBuffer, msgSize-1);
+            uint8_t crc = SimpleComm::calculateCRC8(autoResponseBuffer, msgSize-1);
             printf("MOCK: Calculated CRC: %02X\n", crc);
             autoResponseBuffer[msgSize-1] = crc;
             
@@ -162,7 +162,7 @@ private:
             autoResponseBuffer[2] = StatusResponseMsg::fc | SimpleComm::FC_RESPONSE_BIT;  // FC de réponse
             memcpy(&autoResponseBuffer[3], &resp, sizeof(StatusResponseMsg));
             autoResponseBuffer[sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD - 1] = 
-                SimpleComm::calculateCRC(autoResponseBuffer, sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD - 1);
+                SimpleComm::calculateCRC8(autoResponseBuffer, sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD - 1);
             
             autoResponseSize = sizeof(StatusResponseMsg) + SimpleComm::FRAME_OVERHEAD;
         }
@@ -351,7 +351,7 @@ void test_on_receive(void) {
     };
     
     // Calculate CRC on the entire frame except the last byte
-    frame[sizeof(frame)-1] = SimpleComm::calculateCRC(frame, sizeof(frame)-1);
+    frame[sizeof(frame)-1] = SimpleComm::calculateCRC8(frame, sizeof(frame)-1);
     
     // Inject the frame
     serial.injectData(frame, sizeof(frame));
@@ -596,7 +596,7 @@ void test_malformed_frames(void) {
         0,    // Données supplémentaires pour atteindre la taille annoncée
         0  // CRC
     };
-    wrongLenFrame[4] = SimpleComm::calculateCRC(wrongLenFrame, 4);
+    wrongLenFrame[4] = SimpleComm::calculateCRC8(wrongLenFrame, 4);
     serial.injectData(wrongLenFrame, sizeof(wrongLenFrame));
     auto result = comm.poll();
     TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_PROTO_MISMATCH, result.status);
@@ -619,7 +619,7 @@ void test_stress(void) {
         1,
         0  // CRC
     };
-    frame[4] = SimpleComm::calculateCRC(frame, 4);
+    frame[4] = SimpleComm::calculateCRC8(frame, 4);
     
     // Inject two back-to-back frames
     serial.injectData(frame, sizeof(frame));
@@ -661,7 +661,7 @@ void test_stress(void) {
         SimpleComm::START_OF_FRAME,  // SOF in the data - perfectly valid !
         0  // CRC
     };
-    frameWithSOF[4] = SimpleComm::calculateCRC(frameWithSOF, 4);
+    frameWithSOF[4] = SimpleComm::calculateCRC8(frameWithSOF, 4);
     
     printf("\nTEST: Injecting normal frame\n");
     serial.injectData(frame, sizeof(frame));
@@ -811,7 +811,7 @@ void test_busy_receiving() {
     completeFrame[sizeof(partialFrame)] = 0x01;  // state = 1
     
     // Calculer le CRC sur la frame complète (sans le CRC)
-    uint8_t crc = SimpleComm::calculateCRC(completeFrame, sizeof(partialFrame) + 1);
+    uint8_t crc = SimpleComm::calculateCRC8(completeFrame, sizeof(partialFrame) + 1);
     
     // Injecter le reste avec le bon CRC
     uint8_t remainingFrame[] = {
@@ -861,7 +861,7 @@ void test_request_during_response_wait() {
         0x01,  // state = 1
         0x00   // CRC à calculer
     };
-    incomingRequest[4] = SimpleComm::calculateCRC(incomingRequest, 4);
+    incomingRequest[4] = SimpleComm::calculateCRC8(incomingRequest, 4);
     
     printf("Injecting LED request while waiting for status response...\n");
     serial.injectData(incomingRequest, sizeof(incomingRequest));
@@ -880,7 +880,7 @@ void test_request_during_response_wait() {
         0x00, 0x00, 0x00, 0x00,  // uptime = 0
         0x00   // CRC à calculer
     };
-    lateResponse[8] = SimpleComm::calculateCRC(lateResponse, 8);
+    lateResponse[8] = SimpleComm::calculateCRC8(lateResponse, 8);
     
     printf("Injecting late status response...\n");
     serial.injectData(lateResponse, sizeof(lateResponse));
@@ -918,7 +918,7 @@ void test_duplicate_response() {
         0x00, 0x10, 0x00, 0x00,  // uptime = 4096
         0x00   // CRC à calculer
     };
-    validResponse[8] = SimpleComm::calculateCRC(validResponse, 8);
+    validResponse[8] = SimpleComm::calculateCRC8(validResponse, 8);
     
     // 3. Envoyer la requête et injecter la première réponse
     auto result = comm.sendRequest(statusReq, statusResp);
@@ -944,7 +944,7 @@ void test_duplicate_response() {
         0x00, 0x20, 0x00, 0x00,  // uptime différent
         0x00   // CRC à calculer
     };
-    duplicateResponse[8] = SimpleComm::calculateCRC(duplicateResponse, 8);
+    duplicateResponse[8] = SimpleComm::calculateCRC8(duplicateResponse, 8);
     
     printf("Injecting different duplicate response...\n");
     serial.injectData(duplicateResponse, sizeof(duplicateResponse));

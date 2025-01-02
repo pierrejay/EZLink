@@ -1,10 +1,8 @@
 #pragma once
 #include <cstddef>
-#include <limits>
 
 template<typename T, size_t SIZE>
 class RingBuffer {
-    // The compiler will check that SIZE can fit in S (or whether it's incompatible with T)
 
 public:
     RingBuffer() : head(0), tail(0), count(0) {}
@@ -25,16 +23,31 @@ public:
     }
 
     // Dump until the element is found (exclusive)
-    void dumpUntil(const T* element) {
-        if (!element) return;
+    bool dumpUntil(const T* element) {
+        if (!element) return false;
         
-        // Calculer la distance entre tail et l'élément
+        // Check that the element is within our buffer
+        if (element < &buffer[0] || element >= &buffer[SIZE]) {
+            return false;
+        }
+        
         size_t offset = element - &buffer[0];
         size_t distance = (offset - tail + SIZE) % SIZE;
         
-        // Vérifier que l'élément est bien dans notre buffer
-        if (distance < count) {
-            dump(distance);
+        if (distance >= count) {
+            return false;  // Element outside valid zone
+        }
+        
+        dump(distance);
+        return true;
+    }
+
+    // Slide to the next occurrence of marker, clear the whole buffer if not found
+    void slideTo(const T& marker) {
+        // If marker found, slide to it
+        if (!dumpUntil(find(marker))) {
+            // If no marker found, clear the buffer
+            clear();
         }
     }
 
@@ -48,6 +61,10 @@ public:
     }
 
     // Pop a byte from the buffer
+    // Never used in our implementation, because we want to prevent against
+    // truncated frames that cannot be processed once they are consumed.
+    // We always want to peek() into the buffer, slideTo() if we get an
+    // invalid chunk, and dump() once process is done or if we have garbage.
     T pop() {
         if (count > 0) {
             T byte = buffer[tail];
@@ -71,7 +88,8 @@ public:
         return count == 0;
     }
 
-    // Find the position of the first occurrence of a byte in the buffer
+    // Find the position of the next occurrence of a byte in the buffer,
+    // and return a pointer to it (or nullptr if not found).
     T* find(const T& next) {
         for (size_t i = 0; i < count; i++) {
             if (peek(i) == next) {
@@ -81,12 +99,14 @@ public:
         return nullptr;
     }
 
-    // Find the position of the first occurrence of a byte in the buffer
+    // Find the position of the first occurrence of a byte in the buffer,
+    // and return its index (or SIZE if not found).
     size_t indexOf(const T* element) const {
         if (!element) return SIZE; // valid index cannot be SIZE since index is 0-based
         return (element - &buffer[0]) % SIZE;
     }
 
+    // Return the number of bytes in the buffer
     size_t size() const {
         return count;
     }

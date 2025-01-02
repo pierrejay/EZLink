@@ -335,8 +335,8 @@ public:
         return responseTimeoutMs;
     }
 
-    // Utility function to calculate CRC
-    static uint8_t calculateCRC(const uint8_t* data, size_t size) {
+    // Utility function to calculate CRC8
+    static uint8_t calculateCRC8(const uint8_t* data, size_t size) {
         uint8_t crc = 0;
         for (size_t i = 0; i < size; i++) {
             uint8_t inbyte = data[i];
@@ -347,6 +347,22 @@ public:
                     crc ^= 0x8C;
                 }
                 inbyte >>= 1;
+            }
+        }
+        return crc;
+    }
+
+    // Utility function to calculate CRC16
+    static uint16_t calculateCRC16(const uint8_t* data, size_t size) {
+        uint16_t crc = 0xFFFF;  // Initial value
+        for (size_t i = 0; i < size; i++) {
+            crc ^= (uint16_t)data[i] << 8;
+            for (uint8_t j = 0; j < 8; j++) {
+                if (crc & 0x8000) {
+                    crc = (crc << 1) ^ 0x1021;
+                } else {
+                    crc <<= 1;
+                }
             }
         }
         return crc;
@@ -442,7 +458,7 @@ private:
         frame[1] = frameSize;
         frame[2] = T::fc;
         memcpy(&frame[3], &msg, sizeof(T));
-        frame[frameSize-1] = calculateCRC(frame, frameSize-1);
+        frame[frameSize-1] = calculateCRC8(frame, frameSize-1);
 
         // Send frame (now we are sure we have enough space)
         serial->write(frame, frameSize);
@@ -477,36 +493,16 @@ private:
             
             // L'octet courant doit être un SOF
             if (rxBuffer.peek(0) != START_OF_FRAME) {
-                // On cherche le prochain SOF
-                uint8_t* nextSof = rxBuffer.find(START_OF_FRAME);
-                if (nextSof == nullptr) {
-                    // Pas de SOF, on vide tout
-                    rxBuffer.clear();
-                }
-                else {
-                    // On avance jusqu'au SOF
-                    rxBuffer.dumpUntil(nextSof);
-                }
+                // Sinon on essaye de glisser jusqu'au prochain SOF
+                rxBuffer.slideTo(START_OF_FRAME);
                 return Error(ERR_INVALID_SOF);
             }
             
-            // SOF trouvé, on attend d'avoir aussi LEN
-            if (rxBuffer.size() < 2) {
-                return NoData();
-            }
-            
-            // Vérifier LEN immédiatement
-            uint8_t frameSize = rxBuffer.peek(1);
-            if (frameSize < FRAME_OVERHEAD || frameSize > MAX_FRAME_SIZE) {
-                // On jette le SOF et le LEN invalide
-                rxBuffer.dump(2);
-                return Error(ERR_INVALID_LEN);
-            }
-            
+            // On a maintenant un SOF valide, on commence la capture
             frameCapturePending = true;
         }
 
-        // On doit avoir au moins 2 octets pour lire le LEN
+        // Capture en cours, on doit avoir au moins 2 octets pour lire le LEN
         if (rxBuffer.size() < 2) {
             return NoData();
         }
@@ -514,22 +510,16 @@ private:
         // Vérifier LEN
         uint8_t frameSize = rxBuffer.peek(1);
         if (frameSize < FRAME_OVERHEAD || frameSize > MAX_FRAME_SIZE) {
-            frameCapturePending = false;
-            rxBuffer.dump(1); // On jette juste le SOF invalide
+            // Si LEN invalide, on jette le SOF
+            rxBuffer.dump(1);
+            // On essaye de glisser jusqu'au prochain SOF
+            rxBuffer.slideTo(START_OF_FRAME);
             return Error(ERR_INVALID_LEN);
         }
 
         // Attendre d'avoir la frame complète
         if (rxBuffer.size() < frameSize) {
             return NoData();
-        }
-
-        // Vérifier FC si nécessaire
-        uint8_t fc = rxBuffer.peek(2);
-        if (expectedFc > 0 && fc != expectedFc) {
-            frameCapturePending = false;
-            rxBuffer.dump(1); // On jette le SOF invalide
-            return Error(ERR_INVALID_FC, fc);
         }
 
         // On a une frame complète, on la copie pour le CRC
@@ -540,21 +530,27 @@ private:
 
         // Vérifier CRC
         uint8_t receivedCRC = tempFrame[frameSize-1];
-        uint8_t calculatedCRC = calculateCRC(tempFrame, frameSize-1);
+        uint8_t calculatedCRC = calculateCRC8(tempFrame, frameSize-1);
 
         if (receivedCRC != calculatedCRC) {
             frameCapturePending = false;
+            // CRC invalide, peut être une frame tronquée suivie d'une frame valide, 
+            // on jette le SOF et on essaie de glisser jusqu'au prochain.
+            // Si ce n'était pas une frame tronquée, elle sera traitée au prochain poll()
+            // et on aura une erreur LEN ou CRC.
+            rxBuffer.dump(1);
+            rxBuffer.slideTo(START_OF_FRAME);
+            return Error(ERR_CRC);
+        }
 
-            // Chercher un SOF dans le reste des données
-            uint8_t* nextSof = rxBuffer.find(START_OF_FRAME);
-            if (nextSof != nullptr && rxBuffer.indexOf(nextSof) < frameSize) {
-                // On a trouvé un SOF, on avance jusqu'à lui
-                rxBuffer.dumpUntil(nextSof);
-            } else {
-                // Pas de SOF, on jette toute la frame
-                rxBuffer.dump(frameSize);
-            }
-            return Error(ERR_CRC, fc);
+        // Le CRC est valide, on peut maintenant vérifier le FC si nécessaire
+        uint8_t fc = rxBuffer.peek(2);
+        if (expectedFc > 0 && fc != expectedFc) {
+            frameCapturePending = false;
+            // FC invalide, on jette la frame entière et on essaie de glisser jusqu'au prochain SOF
+            rxBuffer.dump(frameSize);
+            rxBuffer.slideTo(START_OF_FRAME);
+            return Error(ERR_INVALID_FC, fc);
         }
 
         // Frame valide !
