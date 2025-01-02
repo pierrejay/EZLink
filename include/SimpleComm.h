@@ -454,79 +454,147 @@ private:
         }
     }
 
+    // Ring buffer pour la réception
+    uint8_t rxBuffer[MAX_FRAME_SIZE];
+    uint8_t head = 0;
+    uint8_t tail = 0;
+    uint8_t count = 0;
+
+    // Helpers pour le ring buffer
+    void pushByte(uint8_t byte) {
+        if (count < MAX_FRAME_SIZE) {
+            rxBuffer[head] = byte;
+            head = (head + 1) % MAX_FRAME_SIZE;
+            count++;
+        }
+    }
+
+    uint8_t popByte() {
+        if (count > 0) {
+            uint8_t byte = rxBuffer[tail];
+            tail = (tail + 1) % MAX_FRAME_SIZE;
+            count--;
+            return byte;
+        }
+        return 0;
+    }
+
+    uint8_t peekByte(uint8_t offset = 0) const {
+        if (offset < count) {
+            return rxBuffer[(tail + offset) % MAX_FRAME_SIZE];
+        }
+        return 0;
+    }
+
+    void discardBytes(uint8_t n) {
+        n = std::min(n, count);
+        tail = (tail + n) % MAX_FRAME_SIZE;
+        count -= n;
+    }
+
+    // Cherche un SOF dans le buffer, retourne sa position ou 255 si non trouvé
+    uint8_t findSOF() const {
+        for (uint8_t i = 0; i < count; i++) {
+            if (peekByte(i) == START_OF_FRAME) {
+                return i;
+            }
+        }
+        return 255;
+    }
+
     // Nouvelle fonction de capture de frame
     Result captureFrame(uint8_t expectedFc = 0, uint8_t* outFrame = nullptr, size_t* outLen = nullptr) {
-        // Si pas de SOF, chercher le prochain
-        if(!frameCapturePending) {
-            if(!serial->available()) {
-                return NoData();
-            }
-            
-            if(serial->peek() != START_OF_FRAME) {
-                flushRxBufferUntilSOF(); // SOF invalide, on vide le buffer
-                return Error(ERR_INVALID_SOF);
-            }
-            uint8_t byte = serial->read();  // Maintenant on peut consommer le SOF
-            frameCapturePending = true;
+        // D'abord on lit tout ce qui est disponible sur le port série
+        while (serial->available() && count < MAX_FRAME_SIZE) {
+            pushByte(serial->read());
         }
 
-        // À ce stade on a capturé un SOF valide
-        if(serial->available() < 1) {
-            return NoData(); // Pas assez de données pour LEN
-        }
-
-        // Vérifier LEN sans le consommer
-        uint8_t frameSize = serial->peek();
-
-        if(frameSize < FRAME_OVERHEAD || frameSize > MAX_FRAME_SIZE) {
-            frameCapturePending = false;
-            flushRxBufferUntilSOF(); // Frame invalide, on vide le buffer
-            return Error(ERR_INVALID_LEN);
-        }
-
-        // Attendre d'avoir assez de données
-        if(serial->available() < frameSize - 1) { // -1 car SOF déjà consommé
+        // Pas assez de données
+        if (count == 0) {
             return NoData();
         }
 
-        // Capturer la frame complète
-        uint8_t tempFrame[MAX_FRAME_SIZE];
-        tempFrame[0] = START_OF_FRAME;
-        tempFrame[1] = serial->read(); // LEN
-
-        for(size_t i = 2; i < frameSize; i++) {
-            if(serial->peek() == START_OF_FRAME && i < frameSize-1) {
-                frameCapturePending = false;
-                flushRxBufferUntilSOF(); // Frame tronquée, on vide le buffer
-                return Error(ERR_INVALID_LEN);
+        // Si pas de capture en cours, on cherche un SOF
+        if (!frameCapturePending) {
+            if (peekByte(0) != START_OF_FRAME) {
+                // On cherche le prochain SOF
+                uint8_t nextSof = findSOF();
+                if (nextSof == 255) {
+                    // Pas de SOF, on vide tout
+                    count = 0;
+                    head = tail = 0;
+                }
+                else {
+                    // On avance jusqu'au SOF
+                    discardBytes(nextSof);
+                }
+                // Dans tous les cas on signale l'erreur
+                return Error(ERR_INVALID_SOF);
             }
-            tempFrame[i] = serial->read();
+            frameCapturePending = true;
         }
 
-        // Valider FC
-        uint8_t fc = tempFrame[2];
-        if(expectedFc > 0 && fc != expectedFc) {
+        // On doit avoir au moins 2 octets pour lire le LEN
+        if (count < 2) {
+            return NoData();
+        }
+
+        // Vérifier LEN
+        uint8_t frameSize = peekByte(1);
+        if (frameSize < FRAME_OVERHEAD || frameSize > MAX_FRAME_SIZE) {
             frameCapturePending = false;
-            flushRxBufferUntilSOF(); // Frame invalide, on vide le buffer
+            discardBytes(1); // On jette juste le SOF invalide
+            return Error(ERR_INVALID_LEN);
+        }
+
+        // Attendre d'avoir la frame complète
+        if (count < frameSize) {
+            return NoData();
+        }
+
+        // Vérifier FC si nécessaire
+        uint8_t fc = peekByte(2);
+        if (expectedFc > 0 && fc != expectedFc) {
+            frameCapturePending = false;
+            discardBytes(1); // On jette le SOF invalide
             return Error(ERR_INVALID_FC, fc);
         }
 
-        // Valider CRC et retourner la frame
+        // On a une frame complète, on la copie pour le CRC
+        uint8_t tempFrame[MAX_FRAME_SIZE];
+        for (uint8_t i = 0; i < frameSize; i++) {
+            tempFrame[i] = peekByte(i);
+        }
+
+        // Vérifier CRC
         uint8_t receivedCRC = tempFrame[frameSize-1];
         uint8_t calculatedCRC = calculateCRC(tempFrame, frameSize-1);
-        if(receivedCRC != calculatedCRC) {
+
+        if (receivedCRC != calculatedCRC) {
             frameCapturePending = false;
-            flushRxBufferUntilSOF(); // Frame invalide, on vide le buffer
+
+            // Chercher un SOF dans le reste des données
+            uint8_t nextSof = findSOF();
+            if (nextSof != 255 && nextSof < frameSize) {
+                // On a trouvé un SOF, on avance jusqu'à lui
+                discardBytes(nextSof);
+            } else {
+                // Pas de SOF, on jette toute la frame
+                discardBytes(frameSize);
+            }
             return Error(ERR_CRC, fc);
         }
 
-        // Copier frame si demandé
-        if(outFrame && outLen) {
+        // Frame valide !
+        if (outFrame && outLen) {
             memcpy(outFrame, tempFrame, frameSize);
             *outLen = frameSize;
         }
 
+        // On consomme la frame
+        discardBytes(frameSize);
         frameCapturePending = false;
+
         return Success(fc);
     }
 
