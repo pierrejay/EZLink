@@ -2,10 +2,10 @@
 #include <Arduino.h>
 #include <functional>
 #include <type_traits>
-#include "RingBuffer.h"
+#include "ScrollBuffer.h"
 
-#define SIMPLECOMM_DEBUG
-#define SIMPLECOMM_DEBUG_TAG "DBG"
+// #define SIMPLECOMM_DEBUG
+// #define SIMPLECOMM_DEBUG_TAG "DBG"
 
 // TODO FOR NEXT VERSIONS:
 // Add support for custom communication layer (UART, SPI, ... => simple byte input/output ?)
@@ -173,11 +173,11 @@ public:
     static constexpr Result NoData() { return Result{NOTHING_TO_DO, NULL_FC}; }
 
     // Constructor
-    explicit SimpleComm(HardwareSerial* serial, 
-                       uint32_t responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS,
+    explicit SimpleComm(HardwareSerial* serial 
+                       , uint32_t responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS
                        #ifdef SIMPLECOMM_DEBUG
-                       Stream* debugStream = nullptr,
-                       const char* instanceName = ""  // Nom de l'instance pour les logs
+                       , Stream* debugStream = nullptr,
+                       , const char* instanceName = ""  // Nom de l'instance pour les logs
                        #endif
                        ) 
         : serial(serial)
@@ -657,8 +657,8 @@ private:
         return Success(T::fc);
     }
 
-    // Ring buffer pour la réception
-    RingBuffer<uint8_t, MAX_FRAME_SIZE> rxBuffer;
+    // "Scrolling" ring buffer for reception
+    ScrollBuffer<uint8_t, MAX_FRAME_SIZE> rxBuffer;
 
     Result captureFrame(uint8_t expectedFc = 0, uint8_t* outFrame = nullptr, size_t* outLen = nullptr) {
 
@@ -690,7 +690,7 @@ private:
                 #endif
                 
                 // Sinon on essaye de glisser jusqu'au prochain SOF
-                rxBuffer.slideTo(sof); 
+                rxBuffer.scrollTo(sof); 
                 return Error(ERR_INVALID_SOF);
             }
             
@@ -717,7 +717,7 @@ private:
             // Si LEN invalide, on jette le SOF
             rxBuffer.dump(1);
             // On essaye de glisser jusqu'au prochain SOF
-            rxBuffer.slideTo(sof);
+            rxBuffer.scrollTo(sof);
             return Error(ERR_INVALID_LEN);
         }
 
@@ -748,7 +748,7 @@ private:
             debugHexDump("RX invalid CRC", tempFrame, frameSize);
             #endif
             rxBuffer.dump(1);
-            rxBuffer.slideTo(sof);
+            rxBuffer.scrollTo(sof);
             return Error(ERR_CRC);
         }
 
@@ -761,7 +761,7 @@ private:
             debugHexDump("RX invalid FC", tempFrame, frameSize);
             #endif
             rxBuffer.dump(frameSize);
-            rxBuffer.slideTo(sof);
+            rxBuffer.scrollTo(sof);
             return Error(ERR_INVALID_FC, fc);
         }
 

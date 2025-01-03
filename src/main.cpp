@@ -16,7 +16,6 @@
 // Délais et périodes
 #define MASTER_DELAY_MS 2000  // 2s entre chaque test
 #define SLAVE_DELAY_MS 10     // 10ms entre les polls
-#define TEST_TIMEOUT_MS 5000  // Timeout global pour chaque test
 
 // Queue pour les messages de log
 QueueHandle_t logQueue;
@@ -141,8 +140,13 @@ public:
 ThreadSafeLogStream threadSafeLog;
 
 // Communication instances
+#ifdef SIMPLECOMM_DEBUG
 SimpleComm master(&UART1, DEFAULT_RESPONSE_TIMEOUT_MS, &threadSafeLog, "MASTER");
 SimpleComm slave(&UART2, DEFAULT_RESPONSE_TIMEOUT_MS, &threadSafeLog, "SLAVE");
+#else
+SimpleComm master(&UART1, DEFAULT_RESPONSE_TIMEOUT_MS);
+SimpleComm slave(&UART2, DEFAULT_RESPONSE_TIMEOUT_MS);
+#endif
 
 // État du test en cours
 enum TestState {
@@ -238,7 +242,10 @@ void masterTask(void* parameter) {
                 logf("MASTER: Tentative envoi message PWM, pin=%d, freq=%lu", msg.pin, msg.freq);
                 
                 testInProgress = true;
+                unsigned long startTime = millis();  // Capture du temps avant envoi
                 auto result = master.sendMsgAck(msg);
+                unsigned long responseTime = millis() - startTime;  // Calcul du temps de réponse
+                
                 if(result == SimpleComm::ERR_TIMEOUT) {
                     log("MASTER: Timeout attente ACK");
                     stats.masterErrors.timeoutErrors++;
@@ -247,7 +254,8 @@ void masterTask(void* parameter) {
                     logf("MASTER: Erreur envoi PWM, code=%d", result.status);
                     stats.masterErrors.sendErrors++;
                 } else {
-                    logf("MASTER: ACK recu pour PWM, pin=%d, freq=%lu", msg.pin, msg.freq);
+                    logf("MASTER: ACK recu pour PWM, pin=%d, freq=%lu (reponse en %lu ms)", 
+                         msg.pin, msg.freq, responseTime);
                     stats.acksSent++;
                 }
                 
@@ -264,7 +272,10 @@ void masterTask(void* parameter) {
                 log("MASTER: Tentative envoi requete status");
                 
                 testInProgress = true;
+                unsigned long startTime = millis();  // Capture du temps avant envoi
                 auto result = master.sendRequest(req, resp);
+                unsigned long responseTime = millis() - startTime;  // Calcul du temps de réponse
+                
                 if(result == SimpleComm::ERR_TIMEOUT) {
                     log("MASTER: Timeout attente reponse");
                     stats.masterErrors.timeoutErrors++;
@@ -274,8 +285,8 @@ void masterTask(void* parameter) {
                     stats.masterErrors.sendErrors++;
                 } else {
                     stats.requestsSent++;
-                    logf("MASTER: Reponse recue: state=%d, uptime=%lu", 
-                        resp.state, resp.uptime);
+                    logf("MASTER: Reponse recue: state=%d, uptime=%lu (reponse en %lu ms)", 
+                        resp.state, resp.uptime, responseTime);
                 }
                 
                 vTaskDelay(pdMS_TO_TICKS(MASTER_DELAY_MS));
@@ -298,9 +309,8 @@ void slaveTask(void* parameter) {
     while(true) {
         auto result = slave.poll();
         if(result == SimpleComm::SUCCESS) {
-            // On a traité un message avec succès
-            // Donnons un peu de temps au système
-            vTaskDelay(1);  // Juste 1 tick pour laisser respirer le système
+            // À ce stade, le message est déjà traité et la réponse déjà envoyée !
+            vTaskDelay(1);  // Ce délai n'impacte pas le temps de réponse
         }
         else if(result != SimpleComm::NOTHING_TO_DO) {
             // Classifier l'erreur selon son type
@@ -397,7 +407,7 @@ void setup() {
         "masterTask",
         10000,
         NULL,
-        1,  // Priorité normale
+        1,
         NULL,
         0  // Core 0
     );
@@ -407,7 +417,7 @@ void setup() {
         "slaveTask",
         10000,
         NULL,
-        1,  // Priorité normale
+        1,
         NULL,
         1  // Core 1
     );
@@ -418,7 +428,7 @@ void setup() {
         "logTask",
         10000,
         NULL,
-        2,  // Priorité plus élevée pour traiter les logs en priorité
+        1,
         NULL,
         0  // Core 0 avec masterTask
     );

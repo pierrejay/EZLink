@@ -2,10 +2,10 @@
 #include <cstddef>
 
 template<typename T, size_t SIZE>
-class RingBuffer {
+class ScrollBuffer {
 
 public:
-    RingBuffer() : head(0), tail(0), count(0) {}
+    ScrollBuffer() : head(0), tail(0), count(0) {}
 
     // Flush the whole buffer
     void clear() {
@@ -43,7 +43,7 @@ public:
     }
 
     // Slide to the next occurrence of marker, clear the whole buffer if not found
-    void slideTo(const T& marker) {
+    void scrollTo(const T& marker) {
         // If marker found, slide to it
         if (!dumpUntil(find(marker))) {
             // If no marker found, clear the buffer
@@ -64,7 +64,7 @@ public:
     // Never used in our implementation, because we want to prevent against
     // truncated frames: potentially valid chunks cannot be re-processed 
     // once they are consumed.
-    // We always want to peek() into the buffer, slideTo() if we get an
+    // We always want to peek() into the buffer, scrollTo() if we get an
     // invalid chunk, and dump() once process is done or if we have garbage.
     T pop() {
         if (count > 0) {
