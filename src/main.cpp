@@ -354,6 +354,9 @@ void setup() {
     // Communication ports
     UART1.begin(115200, SERIAL_8N1, UART1_RX, UART1_TX);
     UART2.begin(115200, SERIAL_8N1, UART2_RX, UART2_TX);
+
+    // Let the UARTs stabilize
+    delay(10);
     
     // Initialize communication instances
     master.begin();
