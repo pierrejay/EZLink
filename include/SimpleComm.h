@@ -136,26 +136,35 @@ public:
     enum Status {
         SUCCESS = 0,
         // Poll result
-        NOTHING_TO_DO,
+        NOTHING_TO_DO = 1,
         // RegisterProto errors
-        ERR_FC_ALREADY_REGISTERED,  // FC already registered
-        ERR_NAME_ALREADY_REGISTERED, // Name already registered
-        ERR_TOO_MANY_PROTOS,       // Too many protos registered
-        ERR_INVALID_NAME,          // Name is null or empty
+        ERR_FC_ALREADY_REGISTERED = 10,  // FC already registered
+        ERR_NAME_ALREADY_REGISTERED = 11, // Name already registered
+        ERR_TOO_MANY_PROTOS = 12,       // Too many protos registered
+        ERR_INVALID_NAME = 13,          // Name is null or empty
+        ERR_REG_INVALID_FC = 14,      // FC not registered
+        ERR_REG_PROTO_MISMATCH = 15, // Inconsistency between expected and registered proto
         // Poll & sendMsg errors
-        ERR_BUSY_RECEIVING,      // Frame capture pending, we must wait for the end of the frame to send a new message
-        ERR_INVALID_FC,     // FC not registered
-        ERR_INVALID_SOF,    // Invalid SOF
-        ERR_INVALID_LEN,    // Invalid length
-        ERR_RCV_PROTO_MISMATCH, // Message received but inconsistent with expected proto
-        ERR_RCV_ACK_MISMATCH, // ACK received but inconsistent with sent message
-        ERR_RCV_RESP_MISMATCH, // Response received but inconsistent with expected response
-        ERR_SND_PROTO_MISMATCH, // Inconsistency between expected and sent proto
-        ERR_REG_PROTO_MISMATCH, // Inconsistency between expected and registered proto
-        ERR_RCV_UNEXPECTED_RESPONSE, // Received a response but not expected
-        ERR_TIMEOUT,        // No response
-        ERR_CRC,           // Invalid CRC
-        ERR_OVERFLOW,       // Buffer too small
+        ERR_BUSY_RECEIVING = 20,      // Frame capture pending, we must wait for the end of the frame to send a new message
+        // RX errors
+        ERR_RCV_MIN = 30, // Dummy error code
+        ERR_RCV_INVALID_FC = 31,      // FC not registered
+        ERR_RCV_INVALID_SOF = 32,         // Invalid SOF
+        ERR_RCV_INVALID_LEN = 33,         // Invalid length
+        ERR_RCV_PROTO_MISMATCH = 34,   // Message received but inconsistent with expected proto
+        ERR_RCV_ACK_MISMATCH = 35, // ACK received but inconsistent with sent message
+        ERR_RCV_RESP_MISMATCH = 36, // Response received but inconsistent with expected response
+        ERR_RCV_CRC = 37,           // Invalid CRC
+        ERR_RCV_UNEXPECTED_RESPONSE = 38, // Received a response but not expected
+        ERR_RCV_TIMEOUT = 39,        // No response
+        ERR_RCV_MAX = 40, // Dummy error code
+        // TX errors
+        ERR_SND_MIN = 40,       // Dummy error code
+        ERR_SND_INVALID_FC = 41,      // FC not registered
+        ERR_SND_EMPTY_DATA = 42, // Empty data to send
+        ERR_SND_OVERFLOW = 43,   // Buffer too small
+        ERR_SND_PROTO_MISMATCH = 44, // Inconsistency between expected and sent proto
+        ERR_SND_MAX = 45        // Dummy error code
     };
 
     // Complete result of a reception operation
@@ -213,6 +222,15 @@ public:
         #endif
     }
 
+    // Extract data from a message
+    template<typename T>
+    void extractData(const T& msg, uint8_t* outData, size_t& outDataLen) {
+        if (outData) {
+            outDataLen = sizeof(T);
+            memcpy(outData, &msg, outDataLen);
+        }
+    }
+
     // Register REQUEST prototype
     template<typename T>
     Result registerRequest() {
@@ -242,7 +260,7 @@ public:
         // Vérifier qu'une requête avec ce FC est enregistrée
         ProtoStore* requestProto = findProto(T::fc);  // Chercher avec le FC original
         if (requestProto == nullptr) {
-            return Error(ERR_INVALID_FC, T::fc);  // Pas de requête correspondante
+            return Error(ERR_REG_INVALID_FC, T::fc);  // Pas de requête correspondante
         }
 
         // On remplace le FC par son complément (FC | 0x80)
@@ -270,9 +288,28 @@ public:
             typename REQ::ResponseType resp;
             // Appeler le handler
             handler(req, resp);
-            
+
+            // // For responses, we flip the FC bit to generate a response with
+            // // the correct FC (FC | 0x80)
+            // uint8_t fc = resp.fc;
+            // fc |= FC_RESPONSE_BIT;
+
+            // // Check if the response FC is registered
+            // Result protoCheck = checkProto<typename REQ::ResponseType>(fc);
+            // if (protoCheck != SUCCESS) {
+            //     #ifdef SIMPLECOMM_DEBUG
+            //     debugPrintf("Erreur validation proto response FC=0x%02X, code=%d", REQ::fc, protoCheck.status);
+            //     #endif
+            //     return protoCheck;
+            // }
+
+            // // Extract the data from the response
+            // uint8_t data;
+            // size_t dataLen;
+            // extractData(resp, fc, data, dataLen);
+
             // Envoyer la réponse automatiquement
-            Result result = sendMsgInternal(resp);
+            Result result = sendMsgInternal(resp, true);
             if (result != SUCCESS) {
                 #ifdef SIMPLECOMM_DEBUG
                 debugPrintf("Erreur envoi response FC=0x%02X, code=%d", REQ::fc, result.status);
@@ -292,7 +329,7 @@ public:
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert((T::fc & FC_RESPONSE_BIT) == 0, "FC must be <= 127");
         static_assert(T::fc != NULL_FC, "FC must not be NULL (0)");  // Check at compilation
-        return sendMsgInternal(msg);
+        return sendMsgInternal(msg, false);
     }
 
     // Send message and wait for acknowledgement (same message echoed back)
@@ -307,7 +344,7 @@ public:
         cleanupRxBuffer();
         
         // Send message first
-        Result result = sendMsgInternal(msg);
+        Result result = sendMsgInternal(msg, false);
         if (result != SUCCESS) {
             return Error(result.status, T::fc);
         }
@@ -341,7 +378,7 @@ public:
         }
         
         frameCapturePending = false; // Reset frame capture - protects against late responses
-        return Error(ERR_TIMEOUT);
+        return Error(ERR_RCV_TIMEOUT);
     }
 
     // Send request and wait for specific response type
@@ -391,7 +428,7 @@ public:
         }
         
         frameCapturePending = false; // Reset frame capture - protects against late responses
-        return Error(ERR_TIMEOUT);
+        return Error(ERR_RCV_TIMEOUT);
     }
 
     // Process received messages with optional frame capture
@@ -428,9 +465,11 @@ public:
                     proto->callback(&rxBuffer[3]);
                 }
 
-                // Si c'est un message ACK_REQUIRED, envoyer l'ACK automatiquement
+                // Si c'est un message ACK_REQUIRED, envoyer l'ACK automatiquement,
+                // en flippant le FC
+                uint8_t ackFc = result.fc | FC_RESPONSE_BIT;
                 if(proto->type == ProtoType::ACK_REQUIRED) {
-                    autoSendAck(result.fc, &rxBuffer[3], proto->size);
+                    sendFrame(ackFc, &rxBuffer[3], proto->size);
                 }
             }
             return result;
@@ -612,7 +651,7 @@ private:
     Result checkProto(uint8_t fc, ProtoStore** outProto = nullptr) {
         ProtoStore* proto = findProto(fc);
         if (proto == nullptr) {
-            return Error(ERR_INVALID_FC, fc);
+            return Error(ERR_SND_INVALID_FC, fc);
         }
         if (!strEqual(proto->name, T::name)) {
             return Error(ERR_SND_PROTO_MISMATCH, fc);
@@ -625,35 +664,44 @@ private:
 
     // Send message
     template<typename T>
-    Result sendMsgInternal(const T& msg) {
+    Result sendMsgInternal(const T& msg, bool flipFc = false) {
+
+        uint8_t fc = msg.fc;
+        if (flipFc) fc |= FC_RESPONSE_BIT;
+
+        // Check if proto is registered and matches
+        Result protoCheck = checkProto<T>(fc);
+        #ifdef SIMPLECOMM_DEBUG
+        if(protoCheck != SUCCESS) {
+            debugPrintf("Erreur validation proto response FC=0x%02X, code=%d", fc, protoCheck.status);
+            return protoCheck;
+        }
+        #endif
+
+        //Extract data from message
+        uint8_t data[MAX_FRAME_SIZE];
+        size_t dataLen;
+        extractData(msg, data, dataLen);
+
+        // Send frame
+        return sendFrame(fc, (uint8_t*)&msg, sizeof(T));
+    }
+
+    // Send message
+    Result sendFrame(uint8_t fc, uint8_t* data, size_t dataLen) {
+        if (!data || dataLen == 0) {
+            return Error(ERR_SND_EMPTY_DATA);
+        }
 
         // Check if we are already capturing a frame
         if(frameCapturePending) {
-            return Error(ERR_BUSY_RECEIVING, T::fc);
+            return Error(ERR_BUSY_RECEIVING);
         }
-        
-        // For responses, we force the FC with its complement (FC | 0x80)
-        uint8_t fc = T::fc;
-        if (T::type == ProtoType::RESPONSE) {
-            fc |= FC_RESPONSE_BIT;
-        }
-        
-        // // Check if proto is registered and matches
-        // ProtoStore* proto = findProto(fc);
-        // if (proto == nullptr) {
-        //     return Error(ERR_INVALID_FC, fc);
-        // }
-        // if (!strEqual(proto->name, T::name)) {
-        //     return Error(ERR_SND_PROTO_MISMATCH, fc);
-        // }
-        ProtoStore* proto = nullptr;
-        Result result = checkProto<T>(fc, &proto);
-        if (result != SUCCESS) return result;
         
         // Check if we have enough space
-        size_t frameSize = sizeof(T) + FRAME_OVERHEAD; // Only includes non-static fields (data) + overhead
+        size_t frameSize = dataLen + FRAME_OVERHEAD; // Only includes non-static fields (data) + overhead
         if(frameSize > serial->availableForWrite()) {
-            return Error(ERR_OVERFLOW, T::fc);
+            return Error(ERR_SND_OVERFLOW);
         }
 
         // Prepare frame
@@ -661,7 +709,7 @@ private:
         frame[0] = START_OF_FRAME;
         frame[1] = frameSize;
         frame[2] = fc;
-        memcpy(&frame[3], &msg, sizeof(T));
+        memcpy(&frame[3], data, dataLen);
         uint16_t crc = calculateCRC16(frame, frameSize-2);
         frame[frameSize-2] = (uint8_t)(crc >> 8);    // MSB
         frame[frameSize-1] = (uint8_t)(crc & 0xFF);  // LSB
@@ -669,14 +717,14 @@ private:
         
         #ifdef SIMPLECOMM_DEBUG
         // Log la frame envoyée
-        debugHexDump("TX frame", frame, frameSize);
+            debugHexDump("TX frame", frame, frameSize);
         #endif
 
         // Send frame (now we are sure we have enough space)
         serial->write(frame, frameSize);
         serial->flush();
 
-        return Success(T::fc);
+        return Success(fc);
     }
 
     // "Scrolling" ring buffer for reception
@@ -713,7 +761,7 @@ private:
                 
                 // Sinon on essaye de glisser jusqu'au prochain SOF
                 rxBuffer.scrollTo(sof); 
-                return Error(ERR_INVALID_SOF);
+                return Error(ERR_RCV_INVALID_SOF);
             }
             
             // On a maintenant un SOF valide, on commence la capture
@@ -729,10 +777,10 @@ private:
         uint8_t frameSize = rxBuffer.peek(1);
         if (frameSize < FRAME_OVERHEAD || frameSize > MAX_FRAME_SIZE) {
             // Log SOF + LEN invalide
+            #ifdef SIMPLECOMM_DEBUG
             uint8_t header[2];
             header[0] = rxBuffer.peek(0);
             header[1] = rxBuffer.peek(1);
-            #ifdef SIMPLECOMM_DEBUG
             debugHexDump("RX invalid LEN", header, 2);
             #endif
             
@@ -740,7 +788,7 @@ private:
             rxBuffer.dump(1);
             // On essaye de glisser jusqu'au prochain SOF
             rxBuffer.scrollTo(sof);
-            return Error(ERR_INVALID_LEN);
+            return Error(ERR_RCV_INVALID_LEN);
         }
 
         // Attendre d'avoir la frame complète
@@ -771,7 +819,7 @@ private:
             #endif
             rxBuffer.dump(1);
             rxBuffer.scrollTo(sof);
-            return Error(ERR_CRC);
+            return Error(ERR_RCV_CRC);
         }
 
         // Le CRC est valide, on peut maintenant vérifier le FC si nécessaire
@@ -784,7 +832,7 @@ private:
             #endif
             rxBuffer.dump(frameSize);
             rxBuffer.scrollTo(sof);
-            return Error(ERR_INVALID_FC, fc);
+            return Error(ERR_RCV_INVALID_FC, fc);
         }
 
         #ifdef SIMPLECOMM_DEBUG
@@ -812,7 +860,7 @@ private:
         
         ProtoStore* proto = findProto(T::fc);
         if(proto == nullptr) {
-            return Error(ERR_INVALID_FC, T::fc);
+            return Error(ERR_REG_INVALID_FC, T::fc);
         }
         if (!strEqual(proto->name, T::name)) {
             return Error(ERR_REG_PROTO_MISMATCH, T::fc);

@@ -171,43 +171,39 @@ struct Stats {
     
     // Error counters
     struct {
-        uint32_t sendErrors = 0;    // Erreurs d'envoi
-        uint32_t timeoutErrors = 0; // Timeouts sur ACK/Response
-        uint32_t protocolErrors = 0; // Erreurs de protocole
+        uint32_t rxErrors = 0;    // Erreurs de réception
+        uint32_t txErrors = 0; // Erreurs d'envoi
     } masterErrors;
     
     struct {
-        uint32_t receiveErrors = 0;  // Erreurs de réception
-        uint32_t protocolErrors = 0; // Erreurs de protocole (CRC, format...)
-        uint32_t handlerErrors = 0;  // Erreurs dans les handlers
+        uint32_t rxErrors = 0;  // Erreurs de réception
+        uint32_t txErrors = 0; // Erreurs d'envoi
     } slaveErrors;
     
     void print() {
         logf("\nStats Master:\n"
              "Messages envoyes: %lu\n"
              "ACKs envoyes: %lu\n"
-             "Requetes envoyees: %lu\n"
-             "Erreurs: send=%lu, timeout=%lu, proto=%lu", 
+             "Requetes envoyees: %lu\n",
+             "Erreurs: TX=%lu, RX=%lu", 
              messagesSent,
              acksSent,
              requestsSent,
-             masterErrors.sendErrors,
-             masterErrors.timeoutErrors,
-             masterErrors.protocolErrors);
+             masterErrors.txErrors,
+             masterErrors.rxErrors);
             
         logf("\nStats Slave:\n"
              "Messages recus: %lu\n"
              "ACKs recus: %lu\n"
              "Requetes recues: %lu\n"
-             "Erreurs: recv=%lu, proto=%lu, handler=%lu",
+             "Erreurs: RX=%lu, TX=%lu",
              messagesReceived,
              acksReceived,
              requestsReceived,
-             slaveErrors.receiveErrors,
-             slaveErrors.protocolErrors,
-             slaveErrors.handlerErrors);
+             slaveErrors.rxErrors,
+             slaveErrors.txErrors);
     }
-} stats;
+} txRxStats;
 
 // Tâche maître qui exécute les tests séquentiellement
 void masterTask(void* parameter) {
@@ -225,9 +221,9 @@ void masterTask(void* parameter) {
                 auto result = master.sendMsg(msg);
                 if(result != SimpleComm::SUCCESS) {
                     logf("MASTER: Erreur envoi LED, code=%d", result.status);
-                    stats.masterErrors.sendErrors++;
+                    txRxStats.masterErrors.txErrors++;
                 } else {
-                    stats.messagesSent++;
+                    txRxStats.messagesSent++;
                 }
                 
                 // Attendre avant le prochain test
@@ -246,17 +242,26 @@ void masterTask(void* parameter) {
                 auto result = master.sendMsgAck(msg);
                 unsigned long responseTime = millis() - startTime;  // Calcul du temps de réponse
                 
-                if(result == SimpleComm::ERR_TIMEOUT) {
+                int errorCode = (int)result.status;
+                if(result == SimpleComm::ERR_RCV_TIMEOUT) {
                     log("MASTER: Timeout attente ACK");
-                    stats.masterErrors.timeoutErrors++;
+                    txRxStats.masterErrors.rxErrors++;
+                }
+                else if (errorCode > SimpleComm::ERR_SND_MIN && errorCode < SimpleComm::ERR_SND_MAX) {
+                    logf("MASTER: Erreur envoi PWM, code=%d", errorCode);
+                    txRxStats.masterErrors.txErrors++;
+                }
+                else if (errorCode > SimpleComm::ERR_RCV_MIN && errorCode < SimpleComm::ERR_RCV_MAX) {
+                    logf("MASTER: Erreur reception PWM, code=%d", errorCode);
+                    txRxStats.masterErrors.txErrors++;
                 }
                 else if(result != SimpleComm::SUCCESS) {
-                    logf("MASTER: Erreur envoi PWM, code=%d", result.status);
-                    stats.masterErrors.sendErrors++;
+                    logf("MASTER: Erreur envoi/reception PWM, code=%d", errorCode);
+                    txRxStats.masterErrors.txErrors++;
                 } else {
                     logf("MASTER: ACK recu pour PWM, pin=%d, freq=%lu (reponse en %lu ms)", 
                          msg.pin, msg.freq, responseTime);
-                    stats.acksSent++;
+                    txRxStats.acksSent++;
                 }
                 
                 vTaskDelay(pdMS_TO_TICKS(MASTER_DELAY_MS));
@@ -276,15 +281,24 @@ void masterTask(void* parameter) {
                 auto result = master.sendRequest(req, resp);
                 unsigned long responseTime = millis() - startTime;  // Calcul du temps de réponse
                 
-                if(result == SimpleComm::ERR_TIMEOUT) {
+                int errorCode = (int)result.status;
+                if(result == SimpleComm::ERR_RCV_TIMEOUT) {
                     log("MASTER: Timeout attente reponse");
-                    stats.masterErrors.timeoutErrors++;
+                    txRxStats.masterErrors.rxErrors++;
+                }
+                else if (errorCode > SimpleComm::ERR_SND_MIN && errorCode < SimpleComm::ERR_SND_MAX) {
+                    logf("MASTER: Erreur envoi requete, code=%d", errorCode);
+                    txRxStats.masterErrors.txErrors++;
+                }
+                else if (errorCode > SimpleComm::ERR_RCV_MIN && errorCode < SimpleComm::ERR_RCV_MAX) {
+                    logf("MASTER: Erreur reception reponse, code=%d", errorCode);
+                    txRxStats.masterErrors.rxErrors++;
                 }
                 else if(result != SimpleComm::SUCCESS) {
-                    logf("MASTER: Erreur envoi requete, code=%d", result.status);
-                    stats.masterErrors.sendErrors++;
+                    logf("MASTER: Erreur envoi/reception requete, code=%d", errorCode);
+                    txRxStats.masterErrors.txErrors++;
                 } else {
-                    stats.requestsSent++;
+                    txRxStats.requestsSent++;
                     logf("MASTER: Reponse recue: state=%d, uptime=%lu (reponse en %lu ms)", 
                         resp.state, resp.uptime, responseTime);
                 }
@@ -292,8 +306,8 @@ void masterTask(void* parameter) {
                 vTaskDelay(pdMS_TO_TICKS(MASTER_DELAY_MS));
                 currentTest = TEST_FIRE_AND_FORGET;
                 
-                // Afficher les stats après un cycle complet
-                stats.print();
+                // Afficher les txRxStats après un cycle complet
+                txRxStats.print();
                 break;
             }
             
@@ -313,25 +327,18 @@ void slaveTask(void* parameter) {
             vTaskDelay(1);  // Ce délai n'impacte pas le temps de réponse
         }
         else if(result != SimpleComm::NOTHING_TO_DO) {
-            // Classifier l'erreur selon son type
-            switch(result.status) {
-                case SimpleComm::ERR_CRC:
-                case SimpleComm::ERR_INVALID_SOF:
-                case SimpleComm::ERR_INVALID_LEN:
-                    stats.slaveErrors.protocolErrors++;
-                    logf("SLAVE: Erreur protocole, code=%d", result.status);
-                    break;
-                    
-                case SimpleComm::ERR_BUSY_RECEIVING:
-                case SimpleComm::ERR_OVERFLOW:
-                    stats.slaveErrors.receiveErrors++;
-                    logf("SLAVE: Erreur reception, code=%d", result.status);
-                    break;
-                    
-                default:
-                    stats.slaveErrors.handlerErrors++;
-                    logf("SLAVE: Erreur handler, code=%d", result.status);
-                    break;
+            int errorCode = (int)result.status;
+            if (errorCode > SimpleComm::ERR_SND_MIN && errorCode < SimpleComm::ERR_SND_MAX) {
+                logf("SLAVE: Erreur envoi, code=%d", errorCode);
+                txRxStats.slaveErrors.txErrors++;
+            }
+            else if (errorCode > SimpleComm::ERR_RCV_MIN && errorCode < SimpleComm::ERR_RCV_MAX) {
+                logf("SLAVE: Erreur reception, code=%d", errorCode);
+                txRxStats.slaveErrors.rxErrors++;
+            }
+            else {
+                logf("SLAVE: Erreur, code=%d", errorCode);
+                txRxStats.slaveErrors.rxErrors++; // Par défaut on considère une erreur RX
             }
         }
         vTaskDelay(pdMS_TO_TICKS(SLAVE_DELAY_MS));
@@ -386,17 +393,17 @@ void setup() {
     // Setup handlers
     slave.onReceive<SetLedMsg>([](const SetLedMsg& msg) {
         logf("SLAVE: Message LED recu, etat=%d", msg.state);
-        stats.messagesReceived++;
+        txRxStats.messagesReceived++;
     });
     
     slave.onReceive<SetPwmMsg>([](const SetPwmMsg& msg) {
         logf("SLAVE: Message PWM recu, pin=%d, freq=%lu", msg.pin, msg.freq);
-        stats.acksReceived++;
+        txRxStats.acksReceived++;
     });
     
     slave.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp) {
         logf("SLAVE: Requete status recue");
-        stats.requestsReceived++;
+        txRxStats.requestsReceived++;
         resp.state = 1;
         resp.uptime = millis();
     });
