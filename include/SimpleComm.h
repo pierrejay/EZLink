@@ -21,6 +21,19 @@
  * - REQUEST: Message requiring specific response (FC 1-127)
  * - RESPONSE: Response to a REQUEST (FC = request FC | 0x80)
  * 
+ * Communication patterns:
+ * 1. Synchronous exchanges (ACK_REQUIRED and REQUEST/RESPONSE)
+ *    - Designed for immediate response expectation
+ *    - RX buffer is automatically cleaned before sending to ensure reliable response capture
+ *    - Timeout-based waiting for response
+ *    - Best suited for command/control scenarios requiring confirmation
+ * 
+ * 2. Asynchronous exchanges (FIRE_AND_FORGET)
+ *    - No response expected
+ *    - No automatic buffer cleaning
+ *    - User must implement their own synchronization if needed (e.g. session ID, message ID...)
+ *    - Best suited for periodic data transmission or non-critical commands
+ * 
  * FC (Function Code) rules:
  * - Request/Command FC must be between 1-127
  * - Response FC are automatically set to request FC | 0x80 (128-255)
@@ -34,6 +47,7 @@
  * Safety & Robustness features:
  * 1. Buffer management
  *    - Buffer-driven approach (no interbyte timeout)
+ *    - Automatic buffer cleanup before synchronous exchanges
  *    - Automatic buffer cleanup on invalid frames
  *    - Frame capture state tracking
  * 
@@ -56,6 +70,23 @@
  * Error handling ensures proper cleanup and state reset in all cases,
  * making the protocol suitable for both master/slave and bidirectional
  * communication patterns.
+ * 
+ * Thread safety:
+ * The library is not thread-safe by design. In a multithreaded environment:
+ * 1. Synchronous operations (ACK_REQUIRED and REQUEST/RESPONSE)
+ *    - Must be called from a single thread
+ *    - Will automatically clean RX buffer before sending
+ *    - Will block until response/timeout
+ *    - Consider using a dedicated communication thread
+ * 
+ * 2. Asynchronous operations (FIRE_AND_FORGET)
+ *    - Can be safely called from multiple threads
+ *    - No automatic buffer cleaning
+ *    - No blocking
+ *    - User must implement synchronization if needed
+ * 
+ * Note: The frameCapturePending flag protects against concurrent frame captures,
+ * but does not guarantee thread-safety for message sending operations.
  */
 
 #ifndef UNIT_TESTING
@@ -146,9 +177,9 @@ public:
                        uint32_t responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS,
                        #ifdef SIMPLECOMM_DEBUG
                        Stream* debugStream = nullptr,
-                       const char* instanceName = ""
+                       const char* instanceName = ""  // Nom de l'instance pour les logs
                        #endif
-                       )  // Nom de l'instance pour les logs
+                       ) 
         : serial(serial)
         , responseTimeoutMs(responseTimeoutMs)
         #ifdef SIMPLECOMM_DEBUG
@@ -156,6 +187,31 @@ public:
         , instanceName(instanceName)
         #endif
     {}
+
+    // Make cleanupRxBuffer public to allow manual cleanup if needed
+    void cleanupRxBuffer() {
+        // Clear the hardware buffer first
+        while (serial->available()) {
+            serial->read();
+        }
+        // Clear our internal RX buffer
+        rxBuffer.clear();
+        frameCapturePending = false;
+        
+        #ifdef SIMPLECOMM_DEBUG
+        debugPrint("RX buffer cleaned");
+        #endif
+    }
+
+    // Initialize the communication
+    void begin() {
+        // Clean any residual data that might be in the hardware buffer
+        cleanupRxBuffer();
+        
+        #ifdef SIMPLECOMM_DEBUG
+        debugPrint("Instance initialized");
+        #endif
+    }
 
     // Register REQUEST prototype
     template<typename T>
@@ -247,6 +303,9 @@ public:
         static_assert((T::fc & FC_RESPONSE_BIT) == 0, "FC must be <= 127");
         static_assert(T::fc != NULL_FC, "FC must not be NULL (0)");  // Check at compilation
         
+        // Clean the RX buffer before sending
+        cleanupRxBuffer();
+        
         // Send message first
         Result result = sendMsgInternal(msg);
         if (result != SUCCESS) {
@@ -295,6 +354,9 @@ public:
         static_assert(REQ::fc != NULL_FC, "FC must not be NULL (0)");
         static_assert((REQ::fc & FC_RESPONSE_BIT) == 0, "Request FC must be <= 127");
         static_assert(REQ::fc == RESP::fc, "Response FC must match Request FC"); 
+        
+        // Clean the RX buffer before sending
+        cleanupRxBuffer();
         
         // Send request
         Result result = sendMsgInternal(req);
@@ -447,7 +509,8 @@ private:
             debugStream->print("_");
             debugStream->print(instanceName);
             debugStream->print("]: ");
-            debugStream->println(msg);
+            debugStream->print(msg);
+            debugStream->print("\n");  // Un seul \n explicite
         }
     }
     

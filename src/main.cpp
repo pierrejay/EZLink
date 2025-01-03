@@ -81,6 +81,7 @@ public:
         }
         buffer[bufferIndex++] = c;
         if (c == '\n') {
+            buffer[bufferIndex-1] = '\0';
             flushBuffer();
         }
         return 1;
@@ -110,6 +111,7 @@ public:
         // Si on trouve un \n, on flush
         for (size_t i = 0; i < size; i++) {
             if (data[i] == '\n') {
+                buffer[bufferIndex-1] = '\0';
                 flushBuffer();
                 break;
             }
@@ -205,6 +207,9 @@ struct Stats {
 
 // Tâche maître qui exécute les tests séquentiellement
 void masterTask(void* parameter) {
+    // Attendre que le slave soit bien démarré
+    vTaskDelay(pdMS_TO_TICKS(100));  // 100ms de délai initial
+    
     while(true) {
         switch(currentTest) {
             case TEST_FIRE_AND_FORGET: {
@@ -349,6 +354,10 @@ void setup() {
     // Communication ports
     UART1.begin(115200, SERIAL_8N1, UART1_RX, UART1_TX);
     UART2.begin(115200, SERIAL_8N1, UART2_RX, UART2_TX);
+    
+    // Initialize communication instances
+    master.begin();
+    slave.begin();
     
     // Register protos
     master.registerRequest<SetLedMsg>();
