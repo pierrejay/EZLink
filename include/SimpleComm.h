@@ -4,8 +4,8 @@
 #include <type_traits>
 #include "ScrollBuffer.h"
 
-// #define SIMPLECOMM_DEBUG
-// #define SIMPLECOMM_DEBUG_TAG "DBG"
+#define SIMPLECOMM_DEBUG
+#define SIMPLECOMM_DEBUG_TAG "DBG"
 
 // TODO FOR NEXT VERSIONS:
 // Add support for custom communication layer (UART, SPI, ... => simple byte input/output ?)
@@ -176,7 +176,7 @@ public:
     explicit SimpleComm(HardwareSerial* serial 
                        , uint32_t responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS
                        #ifdef SIMPLECOMM_DEBUG
-                       , Stream* debugStream = nullptr,
+                       , Stream* debugStream = nullptr
                        , const char* instanceName = ""  // Nom de l'instance pour les logs
                        #endif
                        ) 
@@ -318,6 +318,7 @@ public:
         
         unsigned long startTime = millis();
         while(millis() - startTime < responseTimeoutMs) {
+            // We expect a response with a complement of the message FC (FC | 0x80)
             result = captureFrame(T::fc | FC_RESPONSE_BIT, frame, &frameLen);
             if(result == NOTHING_TO_DO) {
                 continue;
@@ -370,6 +371,7 @@ public:
         
         unsigned long startTime = millis();
         while(millis() - startTime < responseTimeoutMs) {
+            // We expect a response with a complement of the request FC (FC | 0x80)
             result = captureFrame(RESP::fc | FC_RESPONSE_BIT, frame, &frameLen);  // Attendre le FC avec bit de réponse
             if(result == NOTHING_TO_DO) {
                 continue;
@@ -604,6 +606,23 @@ private:
         return Success(T::fc);
     }
 
+    // Check if proto is registered and matches
+    // If outProto is not null, it will be set to the proto found
+    template<typename T>
+    Result checkProto(uint8_t fc, ProtoStore** outProto = nullptr) {
+        ProtoStore* proto = findProto(fc);
+        if (proto == nullptr) {
+            return Error(ERR_INVALID_FC, fc);
+        }
+        if (!strEqual(proto->name, T::name)) {
+            return Error(ERR_SND_PROTO_MISMATCH, fc);
+        }
+        if(outProto) {
+            *outProto = proto;
+        }
+        return Success(fc);
+    }
+
     // Send message
     template<typename T>
     Result sendMsgInternal(const T& msg) {
@@ -613,20 +632,23 @@ private:
             return Error(ERR_BUSY_RECEIVING, T::fc);
         }
         
-        // Pour les réponses, on force le bit 7 du FC
+        // For responses, we force the FC with its complement (FC | 0x80)
         uint8_t fc = T::fc;
         if (T::type == ProtoType::RESPONSE) {
             fc |= FC_RESPONSE_BIT;
         }
         
-        // Check if proto is registered and matches
-        ProtoStore* proto = findProto(fc);
-        if (proto == nullptr) {
-            return Error(ERR_INVALID_FC, fc);
-        }
-        if (!strEqual(proto->name, T::name)) {
-            return Error(ERR_SND_PROTO_MISMATCH, fc);
-        }
+        // // Check if proto is registered and matches
+        // ProtoStore* proto = findProto(fc);
+        // if (proto == nullptr) {
+        //     return Error(ERR_INVALID_FC, fc);
+        // }
+        // if (!strEqual(proto->name, T::name)) {
+        //     return Error(ERR_SND_PROTO_MISMATCH, fc);
+        // }
+        ProtoStore* proto = nullptr;
+        Result result = checkProto<T>(fc, &proto);
+        if (result != SUCCESS) return result;
         
         // Check if we have enough space
         size_t frameSize = sizeof(T) + FRAME_OVERHEAD; // Only includes non-static fields (data) + overhead
@@ -835,7 +857,7 @@ private:
             return;  // On ne peut pas envoyer d'ACK pendant une capture
         }
         
-        // Créer le FC d'ACK (bit 7 = 1)
+        // Create the ACK FC (bit 7 = 1)
         uint8_t ackFc = originalFc | FC_RESPONSE_BIT;
         
         // Vérifier qu'on a assez d'espace dans le buffer TX
