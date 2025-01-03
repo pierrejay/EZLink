@@ -671,12 +671,12 @@ private:
 
         // Check if proto is registered and matches
         Result protoCheck = checkProto<T>(fc);
-        #ifdef SIMPLECOMM_DEBUG
         if(protoCheck != SUCCESS) {
+            #ifdef SIMPLECOMM_DEBUG
             debugPrintf("Erreur validation proto response FC=0x%02X, code=%d", fc, protoCheck.status);
+            #endif
             return protoCheck;
         }
-        #endif
 
         //Extract data from message
         uint8_t data[MAX_FRAME_SIZE];
