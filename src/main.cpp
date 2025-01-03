@@ -184,7 +184,7 @@ struct Stats {
         logf("\nStats Master:\n"
              "Messages envoyes: %lu\n"
              "ACKs envoyes: %lu\n"
-             "Requetes envoyees: %lu\n",
+             "Requetes envoyees: %lu\n"
              "Erreurs: TX=%lu, RX=%lu", 
              messagesSent,
              acksSent,
