@@ -4,6 +4,9 @@
 #include <type_traits>
 #include "RingBuffer.h"
 
+#define SIMPLECOMM_DEBUG
+#define SIMPLECOMM_DEBUG_TAG "DBG"
+
 // TODO FOR NEXT VERSIONS:
 // Add support for custom communication layer (UART, SPI, ... => simple byte input/output ?)
 // Decouple processing messages from the communication layer (queue + custom buffers or handlers ?)  
@@ -56,8 +59,9 @@
  */
 
 #ifndef UNIT_TESTING
-// For running on hardware, we define constants behind a namespace to avoid
-// pollution as inline constants are not supported by C++11
+// For running on hardware, we define constants globally, 
+// behind a namespace to avoid pollution as 
+// inline constants are not supported by C++11
 namespace SimpleCommDef {
     // Frame format
     static constexpr size_t MAX_FRAME_SIZE = 32;      // Defines max RX buffer size
@@ -132,12 +136,25 @@ public:
         bool operator==(Status s) const { return status == s; }
         bool operator!=(Status s) const { return status != s; }
     };
+    // Helpers to create results
+    static constexpr Result Error(Status status, uint8_t fc = NULL_FC) { return Result{status, fc}; }
+    static constexpr Result Success(uint8_t fc) { return Result{SUCCESS, fc}; }
+    static constexpr Result NoData() { return Result{NOTHING_TO_DO, NULL_FC}; }
 
     // Constructor
     explicit SimpleComm(HardwareSerial* serial, 
-                       uint32_t responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS) 
+                       uint32_t responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS,
+                       #ifdef SIMPLECOMM_DEBUG
+                       Stream* debugStream = nullptr,
+                       const char* instanceName = ""
+                       #endif
+                       )  // Nom de l'instance pour les logs
         : serial(serial)
         , responseTimeoutMs(responseTimeoutMs)
+        #ifdef SIMPLECOMM_DEBUG
+        , debugStream(debugStream)
+        , instanceName(instanceName)
+        #endif
     {}
 
     // Register REQUEST prototype
@@ -195,8 +212,20 @@ public:
         
         return onMessage<REQ>([this, handler](const REQ& req) {
             typename REQ::ResponseType resp;
+            // Appeler le handler
             handler(req, resp);
-            sendMsgInternal(resp);  // Automatic response
+            
+            // Envoyer la réponse automatiquement
+            Result result = sendMsgInternal(resp);
+            if (result != SUCCESS) {
+                #ifdef SIMPLECOMM_DEBUG
+                debugPrintf("Erreur envoi response FC=0x%02X, code=%d", REQ::fc, result.status);
+                #endif
+            } else {
+                #ifdef SIMPLECOMM_DEBUG
+                debugPrintf("Response FC=0x%02X envoyee avec succes", REQ::fc);
+                #endif
+            }
         });
     }
 
@@ -334,6 +363,11 @@ public:
                 if(proto->callback) {
                     proto->callback(&rxBuffer[3]);
                 }
+
+                // Si c'est un message ACK_REQUIRED, envoyer l'ACK automatiquement
+                if(proto->type == ProtoType::ACK_REQUIRED) {
+                    autoSendAck(result.fc, &rxBuffer[3], proto->size);
+                }
             }
             return result;
         }
@@ -389,23 +423,86 @@ private:
     // Structure to store message prototypes
     struct ProtoStore {
         ProtoType type = ProtoType::FIRE_AND_FORGET;
-        const char* name = nullptr;  // Add name
-        uint8_t fc = NULL_FC;  // FC of the message
+        const char* name = nullptr;
+        uint8_t fc = NULL_FC;
         size_t size = 0;
         std::function<void(const void*)> callback = nullptr;
     };
 
     // Attributes
-    HardwareSerial* serial;
-    uint32_t responseTimeoutMs;   // Timeout for waiting for a response
-    ProtoStore protos[MAX_PROTOS];  // Indexed by FC
-    bool frameCapturePending = false;  // État de la capture de frame
+    HardwareSerial* serial;         // Port de communication
+    uint32_t responseTimeoutMs;
+    ProtoStore protos[MAX_PROTOS];
+    bool frameCapturePending = false;
 
+    #ifdef SIMPLECOMM_DEBUG
+    Stream* debugStream;            // Port de debug (optionnel)
+    const char* instanceName;       // Nom de l'instance pour les logs
 
-    // Helpers to create results
-    static constexpr Result Error(Status status, uint8_t fc = NULL_FC) { return Result{status, fc}; }
-    static constexpr Result Success(uint8_t fc) { return Result{SUCCESS, fc}; }
-    static constexpr Result NoData() { return Result{NOTHING_TO_DO, NULL_FC}; }
+    // Helper pour les logs de debug
+    void debugPrint(const char* msg) {
+        if (debugStream) {
+            debugStream->print("[");
+            debugStream->print(SIMPLECOMM_DEBUG_TAG);
+            debugStream->print("_");
+            debugStream->print(instanceName);
+            debugStream->print("]: ");
+            debugStream->println(msg);
+        }
+    }
+    
+    void debugPrintf(const char* format, ...) {
+        if (debugStream) {
+            char buffer[128];
+            va_list args;
+            va_start(args, format);
+            vsnprintf(buffer, sizeof(buffer), format, args);
+            va_end(args);
+            debugStream->print("[");
+            debugStream->print(SIMPLECOMM_DEBUG_TAG);
+            debugStream->print("_");
+            debugStream->print(instanceName);
+            debugStream->print("]: ");
+            debugStream->println(buffer);
+        }
+    }
+
+    // Helper pour les logs de debug
+    void debugHexDump(const char* prefix, const uint8_t* data, size_t len) {
+        if (!debugStream) return;
+        debugStream->print("[");
+        debugStream->print(SIMPLECOMM_DEBUG_TAG);
+        debugStream->print("_");
+        debugStream->print(instanceName);
+        debugStream->print("]: ");
+        debugStream->print(prefix);
+        debugStream->print(" [");
+        debugStream->print(len);
+        debugStream->print(" bytes]");
+        
+        // Afficher l'analyse rapide si c'est une frame
+        if (len >= FRAME_OVERHEAD) {
+            debugStream->print(" SOF=0x");
+            if (data[0] < 0x10) debugStream->print("0");
+            debugStream->print(data[0], HEX);
+            debugStream->print(" LEN=");
+            debugStream->print(data[1]);
+            debugStream->print(" FC=0x");
+            if (data[2] < 0x10) debugStream->print("0");
+            debugStream->print(data[2], HEX);
+        }
+        
+        debugStream->print(" => ");
+        
+        // Afficher le hexdump
+        for(size_t i = 0; i < len; i++) {
+            if(data[i] < 0x10) debugStream->print("0");
+            debugStream->print(data[i], HEX);
+            debugStream->print(" ");
+        }
+        debugStream->println();
+    }
+    #endif
 
     // Register message prototype
     template<typename T>
@@ -453,13 +550,19 @@ private:
             return Error(ERR_BUSY_RECEIVING, T::fc);
         }
         
+        // Pour les réponses, on force le bit 7 du FC
+        uint8_t fc = T::fc;
+        if (T::type == ProtoType::RESPONSE) {
+            fc |= FC_RESPONSE_BIT;
+        }
+        
         // Check if proto is registered and matches
-        ProtoStore* proto = findProto(T::fc);
+        ProtoStore* proto = findProto(fc);
         if (proto == nullptr) {
-            return Error(ERR_INVALID_FC, T::fc);
+            return Error(ERR_INVALID_FC, fc);
         }
         if (!strEqual(proto->name, T::name)) {
-            return Error(ERR_SND_PROTO_MISMATCH, T::fc);
+            return Error(ERR_SND_PROTO_MISMATCH, fc);
         }
         
         // Check if we have enough space
@@ -472,11 +575,17 @@ private:
         uint8_t frame[MAX_FRAME_SIZE];
         frame[0] = START_OF_FRAME;
         frame[1] = frameSize;
-        frame[2] = T::fc;
+        frame[2] = fc;
         memcpy(&frame[3], &msg, sizeof(T));
         uint16_t crc = calculateCRC16(frame, frameSize-2);
         frame[frameSize-2] = (uint8_t)(crc >> 8);    // MSB
         frame[frameSize-1] = (uint8_t)(crc & 0xFF);  // LSB
+
+        
+        #ifdef SIMPLECOMM_DEBUG
+        // Log la frame envoyée
+        debugHexDump("TX frame", frame, frameSize);
+        #endif
 
         // Send frame (now we are sure we have enough space)
         serial->write(frame, frameSize);
@@ -511,6 +620,12 @@ private:
             
             // L'octet courant doit être un SOF
             if (rxBuffer.peek(0) != sof) {
+                // Log le SOF invalide
+                uint8_t invalidSof = rxBuffer.peek(0);
+                #ifdef SIMPLECOMM_DEBUG
+                debugHexDump("RX invalid SOF", &invalidSof, 1);
+                #endif
+                
                 // Sinon on essaye de glisser jusqu'au prochain SOF
                 rxBuffer.slideTo(sof); 
                 return Error(ERR_INVALID_SOF);
@@ -528,6 +643,14 @@ private:
         // Vérifier LEN
         uint8_t frameSize = rxBuffer.peek(1);
         if (frameSize < FRAME_OVERHEAD || frameSize > MAX_FRAME_SIZE) {
+            // Log SOF + LEN invalide
+            uint8_t header[2];
+            header[0] = rxBuffer.peek(0);
+            header[1] = rxBuffer.peek(1);
+            #ifdef SIMPLECOMM_DEBUG
+            debugHexDump("RX invalid LEN", header, 2);
+            #endif
+            
             // Si LEN invalide, on jette le SOF
             rxBuffer.dump(1);
             // On essaye de glisser jusqu'au prochain SOF
@@ -558,6 +681,9 @@ private:
             //   dans les données de la frame invalide, il sera rejeté.
             // Dans tous les cas, on ne jette aucune frame valide, tant qu'on appelle
             // régulièrement poll() on finira par tomber sur le SOF d'une frame valide.
+            #ifdef SIMPLECOMM_DEBUG
+            debugHexDump("RX invalid CRC", tempFrame, frameSize);
+            #endif
             rxBuffer.dump(1);
             rxBuffer.slideTo(sof);
             return Error(ERR_CRC);
@@ -568,10 +694,17 @@ private:
         if (expectedFc > 0 && fc != expectedFc) {
             frameCapturePending = false;
             // FC invalide, on jette la frame entière et on essaie de glisser jusqu'au prochain SOF
+            #ifdef SIMPLECOMM_DEBUG
+            debugHexDump("RX invalid FC", tempFrame, frameSize);
+            #endif
             rxBuffer.dump(frameSize);
             rxBuffer.slideTo(sof);
             return Error(ERR_INVALID_FC, fc);
         }
+
+        #ifdef SIMPLECOMM_DEBUG
+        debugHexDump("RX valid frame", tempFrame, frameSize);
+        #endif
 
         // Frame valide !
         if (outFrame && outLen) {
@@ -630,6 +763,39 @@ private:
     // Compare 2 strings
     static bool strEqual(const char* a, const char* b) {
         return strcmp(a, b) == 0;
+    }
+
+    // Fonction pour envoyer automatiquement un ACK
+    void autoSendAck(uint8_t originalFc, const void* payload, size_t payloadSize) {
+        // Vérifier qu'on n'est pas déjà en train de capturer une frame
+        if(frameCapturePending) {
+            return;  // On ne peut pas envoyer d'ACK pendant une capture
+        }
+        
+        // Créer le FC d'ACK (bit 7 = 1)
+        uint8_t ackFc = originalFc | FC_RESPONSE_BIT;
+        
+        // Vérifier qu'on a assez d'espace dans le buffer TX
+        size_t frameSize = payloadSize + FRAME_OVERHEAD;
+        if(frameSize > serial->availableForWrite()) {
+            return;  // Buffer TX plein, on ne peut pas envoyer l'ACK
+        }
+        
+        // Construire la frame d'ACK
+        uint8_t frame[MAX_FRAME_SIZE];
+        frame[0] = START_OF_FRAME;
+        frame[1] = frameSize;
+        frame[2] = ackFc;
+        memcpy(&frame[3], payload, payloadSize);
+        
+        // Calculer et ajouter le CRC
+        uint16_t crc = calculateCRC16(frame, frameSize - 2);
+        frame[frameSize-2] = (uint8_t)(crc >> 8);
+        frame[frameSize-1] = (uint8_t)(crc & 0xFF);
+        
+        // Envoyer la frame
+        serial->write(frame, frameSize);
+        serial->flush();
     }
 
 #ifdef UNIT_TESTING
