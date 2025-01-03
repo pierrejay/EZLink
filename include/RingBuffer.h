@@ -22,11 +22,11 @@ public:
         count -= n;
     }
 
-    // Dump until the element is found (exclusive)
+    // Dump until an element is found (exclusive)
     bool dumpUntil(const T* element) {
         if (!element) return false;
         
-        // Check that the element is within our buffer
+        // Check if the element is inside our buffer
         if (element < &buffer[0] || element >= &buffer[SIZE]) {
             return false;
         }
@@ -62,7 +62,8 @@ public:
 
     // Pop a byte from the buffer
     // Never used in our implementation, because we want to prevent against
-    // truncated frames that cannot be processed once they are consumed.
+    // truncated frames: potentially valid chunks cannot be re-processed 
+    // once they are consumed.
     // We always want to peek() into the buffer, slideTo() if we get an
     // invalid chunk, and dump() once process is done or if we have garbage.
     T pop() {

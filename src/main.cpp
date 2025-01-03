@@ -1,56 +1,3 @@
-// #define STM32
-
-#if defined(STM32F0) || defined(STM32F1) || defined(STM32F2) || defined(STM32F3) || \
-    defined(STM32F4) || defined(STM32F7) || defined(STM32L0) || defined(STM32L1) || \
-    defined(STM32L4) || defined(STM32H7)
-
-#include <Arduino.h>
-#include "SimpleComm.h"
-#include "SimpleComm_Proto.h"
-
-SimpleComm comm(&Serial);
-
-void setup() {
-    Serial.begin(115200);
-    
-    // Register protos (even if we don't receive them)
-    comm.registerProto<SetLedMsg>();
-    comm.registerProto<SetPwmMsg>();
-    comm.registerProto<GetStatusMsg>();
-    comm.registerProto<StatusResponseMsg>();
-}
-
-void loop() {
-    // 1. Fire and forget
-    SetLedMsg ledOn{.state = 1};
-    comm.sendMsg(ledOn);  // No response wait
-    delay(1000);
-    
-    // 2. With ACK
-    SetPwmMsg pwm{.pin = 1, .freq = 1000};
-    auto result = comm.sendMsgAck(pwm);  // Wait for echo
-    if(result == SimpleComm::SUCCESS) {
-        Serial.write("ok\n");
-    }
-    delay(1000);
-    
-    // 3. Request/Response
-    GetStatusMsg req{.dummy = 0};
-    StatusResponseMsg resp;
-    result = comm.sendRequest(req, resp);  // Wait for typed response
-    
-    if(result == SimpleComm::SUCCESS) {
-        Serial.write("ok\n");
-    }
-    
-    delay(1000);
-    
-    // Process incoming messages (if necessary)
-    comm.poll();
-} 
-
-#elif defined(ESP32)
-
 #include <Arduino.h>
 #include "SimpleComm.h"
 #include "SimpleComm_Proto.h"
@@ -66,154 +13,217 @@ void loop() {
 #define UART2 Serial2
 #define USB Serial
 
-// Task configuration
-#define MASTER_DELAY_US 1000  // 1ms between messages
-#define SLAVE_DELAY_US  100   // 100us between polls
-#define STATS_PERIOD_MS 1000  // Print stats every second
-
-// Extended stats with timing
-struct Stats {
-    // Message counters
-    uint32_t messagesReceived = 0;
-    uint32_t ackReceived = 0;
-    uint32_t requestsReceived = 0;
-    uint32_t errors = 0;
-    
-    // Performance metrics
-    uint32_t messagesSent = 0;
-    uint32_t messagesPerSecond = 0;
-    uint32_t maxLatencyUs = 0;
-    uint32_t minLatencyUs = UINT32_MAX;
-    uint32_t totalLatencyUs = 0;  // For average calculation
-    
-    void updateRate() {
-        static uint32_t lastUpdate = 0;
-        static uint32_t lastCount = 0;
-        
-        if (millis() - lastUpdate >= STATS_PERIOD_MS) {
-            messagesPerSecond = ((messagesSent - lastCount) * 1000) / STATS_PERIOD_MS;
-            lastCount = messagesSent;
-            lastUpdate = millis();
-            
-            // Print stats
-            USB.printf("\nStats after %lu seconds:\n", millis()/1000);
-            USB.printf("Messages: Sent=%lu/s, Received=%lu, Acks=%lu, Reqs=%lu, Errs=%lu\n",
-                messagesPerSecond, messagesReceived, ackReceived, requestsReceived, errors);
-            USB.printf("Latency: Min=%lu us, Max=%lu us, Avg=%lu us\n",
-                minLatencyUs, maxLatencyUs, totalLatencyUs/messagesSent);
-            
-            // Reset some metrics
-            maxLatencyUs = 0;
-            minLatencyUs = UINT32_MAX;
-            totalLatencyUs = 0;
-        }
-    }
-} stats;
+// Délais et périodes
+#define MASTER_DELAY_MS 2000  // 2s entre chaque test
+#define SLAVE_DELAY_MS 10     // 10ms entre les polls
+#define TEST_TIMEOUT_MS 5000  // Timeout global pour chaque test
 
 // Communication instances
 SimpleComm master(&UART1);
 SimpleComm slave(&UART2);
 
-// Task configuration (in ticks, assuming configTICK_RATE_HZ = 100)
-#define MASTER_DELAY_TICKS (MASTER_DELAY_US/1000/portTICK_PERIOD_MS)  // Convert us to ms then to ticks
-#define SLAVE_DELAY_TICKS  (SLAVE_DELAY_US/1000/portTICK_PERIOD_MS)   // Convert us to ms then to ticks
+// État du test en cours
+enum TestState {
+    TEST_FIRE_AND_FORGET,
+    TEST_ACK_REQUIRED,
+    TEST_REQUEST_RESPONSE,
+    TEST_DONE
+};
 
-// Master task running on core 0
-void masterTask(void* parameter) {
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = MASTER_DELAY_TICKS;  // Already in ticks
+volatile TestState currentTest = TEST_FIRE_AND_FORGET;
+volatile bool testInProgress = false;
+
+// Statistiques séparées pour master et slave
+struct Stats {
+    // Message counters
+    uint32_t messagesSent = 0;     // Master only
+    uint32_t messagesReceived = 0;  // Slave only
+    uint32_t acksSent = 0;         // Master only  
+    uint32_t acksReceived = 0;     // Slave only
+    uint32_t requestsSent = 0;     // Master only
+    uint32_t requestsReceived = 0;  // Slave only
     
+    // Error counters
+    struct {
+        uint32_t sendErrors = 0;    // Erreurs d'envoi
+        uint32_t timeoutErrors = 0; // Timeouts sur ACK/Response
+        uint32_t protocolErrors = 0; // Erreurs de protocole
+    } masterErrors;
+    
+    struct {
+        uint32_t receiveErrors = 0;  // Erreurs de réception
+        uint32_t protocolErrors = 0; // Erreurs de protocole (CRC, format...)
+        uint32_t handlerErrors = 0;  // Erreurs dans les handlers
+    } slaveErrors;
+    
+    void print() {
+        USB.printf("\nStats Master:\n");
+        USB.printf("Messages envoyés: %lu\n", messagesSent);
+        USB.printf("ACKs envoyés: %lu\n", acksSent);
+        USB.printf("Requêtes envoyées: %lu\n", requestsSent);
+        USB.printf("Erreurs: send=%lu, timeout=%lu, proto=%lu\n", 
+            masterErrors.sendErrors,
+            masterErrors.timeoutErrors,
+            masterErrors.protocolErrors);
+            
+        USB.printf("\nStats Slave:\n"); 
+        USB.printf("Messages reçus: %lu\n", messagesReceived);
+        USB.printf("ACKs reçus: %lu\n", acksReceived);
+        USB.printf("Requêtes reçues: %lu\n", requestsReceived);
+        USB.printf("Erreurs: recv=%lu, proto=%lu, handler=%lu\n",
+            slaveErrors.receiveErrors,
+            slaveErrors.protocolErrors,
+            slaveErrors.handlerErrors);
+    }
+} stats;
+
+// Tâche maître qui exécute les tests séquentiellement
+void masterTask(void* parameter) {
     while(true) {
-        uint32_t startTime = micros();
-        
-        // 1. FIRE_AND_FORGET
-        SetLedMsg ledMsg{.state = (uint8_t)(stats.messagesSent & 1)};
-        auto result = master.sendMsg(ledMsg);
-        if(result != SimpleComm::SUCCESS) {
-            stats.errors++;
-        }
-        stats.messagesSent++;
-        
-        // 2. ACK_REQUIRED (every 10th message)
-        if((stats.messagesSent % 10) == 0) {
-            SetPwmMsg pwmMsg{.pin = 1, .freq = 1000};
-            result = master.sendMsgAck(pwmMsg);
-            if(result != SimpleComm::SUCCESS) {
-                stats.errors++;
+        switch(currentTest) {
+            case TEST_FIRE_AND_FORGET: {
+                USB.println("\n=== Test FIRE_AND_FORGET ===");
+                SetLedMsg msg{.state = 1};
+                USB.printf("MASTER: Tentative envoi message LED, état=%d\n", msg.state);
+                
+                testInProgress = true;
+                auto result = master.sendMsg(msg);
+                if(result != SimpleComm::SUCCESS) {
+                    USB.printf("MASTER: Erreur envoi LED, code=%d\n", result.status);
+                    stats.masterErrors.sendErrors++;
+                } else {
+                    stats.messagesSent++;
+                }
+                
+                // Attendre avant le prochain test
+                vTaskDelay(pdMS_TO_TICKS(MASTER_DELAY_MS));
+                currentTest = TEST_ACK_REQUIRED;
+                break;
             }
-        }
-        
-        // 3. REQUEST/RESPONSE (every 100th message)
-        if((stats.messagesSent % 100) == 0) {
-            GetStatusMsg req{};
-            StatusResponseMsg resp{};
-            result = master.sendRequest(req, resp);
-            if(result != SimpleComm::SUCCESS) {
-                stats.errors++;
+            
+            case TEST_ACK_REQUIRED: {
+                USB.println("\n=== Test ACK_REQUIRED ===");
+                SetPwmMsg msg{.pin = 1, .freq = 1000};
+                USB.printf("MASTER: Tentative envoi message PWM, pin=%d, freq=%lu\n", msg.pin, msg.freq);
+                
+                testInProgress = true;
+                auto result = master.sendMsgAck(msg);
+                if(result == SimpleComm::ERR_TIMEOUT) {
+                    USB.printf("MASTER: Timeout attente ACK\n");
+                    stats.masterErrors.timeoutErrors++;
+                }
+                else if(result != SimpleComm::SUCCESS) {
+                    USB.printf("MASTER: Erreur envoi PWM, code=%d\n", result.status);
+                    stats.masterErrors.sendErrors++;
+                } else {
+                    stats.acksSent++;
+                }
+                
+                vTaskDelay(pdMS_TO_TICKS(MASTER_DELAY_MS));
+                currentTest = TEST_REQUEST_RESPONSE;
+                break;
             }
+            
+            case TEST_REQUEST_RESPONSE: {
+                USB.println("\n=== Test REQUEST/RESPONSE ===");
+                GetStatusMsg req{};
+                StatusResponseMsg resp{};
+                
+                USB.println("MASTER: Tentative envoi requête status");
+                
+                testInProgress = true;
+                auto result = master.sendRequest(req, resp);
+                if(result == SimpleComm::ERR_TIMEOUT) {
+                    USB.printf("MASTER: Timeout attente réponse\n");
+                    stats.masterErrors.timeoutErrors++;
+                }
+                else if(result != SimpleComm::SUCCESS) {
+                    USB.printf("MASTER: Erreur envoi requête, code=%d\n", result.status);
+                    stats.masterErrors.sendErrors++;
+                } else {
+                    stats.requestsSent++;
+                    USB.printf("MASTER: Réponse reçue: state=%d, uptime=%lu\n", 
+                        resp.state, resp.uptime);
+                }
+                
+                vTaskDelay(pdMS_TO_TICKS(MASTER_DELAY_MS));
+                currentTest = TEST_FIRE_AND_FORGET;
+                
+                // Afficher les stats après un cycle complet
+                stats.print();
+                break;
+            }
+            
+            default:
+                vTaskDelay(pdMS_TO_TICKS(MASTER_DELAY_MS));
+                break;
         }
-        
-        // Update timing stats
-        uint32_t latency = micros() - startTime;
-        stats.maxLatencyUs = max(stats.maxLatencyUs, latency);
-        stats.minLatencyUs = min(stats.minLatencyUs, latency);
-        stats.totalLatencyUs += latency;
-        
-        // Precise timing using vTaskDelayUntil
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
 
-// Slave task running on core 1
+// Tâche esclave qui poll en continu
 void slaveTask(void* parameter) {
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = SLAVE_DELAY_TICKS;  // Already in ticks
-    
     while(true) {
         auto result = slave.poll();
         if(result != SimpleComm::SUCCESS && result != SimpleComm::NOTHING_TO_DO) {
-            stats.errors++;
+            // Classifier l'erreur selon son type
+            switch(result.status) {
+                case SimpleComm::ERR_CRC:
+                case SimpleComm::ERR_INVALID_SOF:
+                case SimpleComm::ERR_INVALID_LEN:
+                    stats.slaveErrors.protocolErrors++;
+                    USB.printf("SLAVE: Erreur protocole, code=%d\n", result.status);
+                    break;
+                    
+                case SimpleComm::ERR_BUSY_RECEIVING:
+                case SimpleComm::ERR_OVERFLOW:
+                    stats.slaveErrors.receiveErrors++;
+                    USB.printf("SLAVE: Erreur réception, code=%d\n", result.status);
+                    break;
+                    
+                default:
+                    stats.slaveErrors.handlerErrors++;
+                    USB.printf("SLAVE: Erreur handler, code=%d\n", result.status);
+                    break;
+            }
         }
-        
-        stats.updateRate();
-        
-        // Precise timing using vTaskDelayUntil
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+        vTaskDelay(pdMS_TO_TICKS(SLAVE_DELAY_MS));
     }
 }
 
 void setup() {
     // Debug port
     USB.begin(115200);
-    USB.println("\nStarting stress test...");
-    USB.printf("Configuration: Master=%uus, Slave=%uus\n", 
-        MASTER_DELAY_US, SLAVE_DELAY_US);
+    USB.println("\nDémarrage du test séquentiel...");
     
     // Communication ports
     UART1.begin(115200, SERIAL_8N1, UART1_RX, UART1_TX);
     UART2.begin(115200, SERIAL_8N1, UART2_RX, UART2_TX);
     
     // Register protos
-    master.registerProto<SetLedMsg>();
-    master.registerProto<SetPwmMsg>();
-    master.registerProto<GetStatusMsg>();
-    master.registerProto<StatusResponseMsg>();
+    master.registerRequest<SetLedMsg>();
+    master.registerRequest<SetPwmMsg>();
+    master.registerRequest<GetStatusMsg>();
+    master.registerResponse<StatusResponseMsg>();
     
-    slave.registerProto<SetLedMsg>();
-    slave.registerProto<SetPwmMsg>();
-    slave.registerProto<GetStatusMsg>();
-    slave.registerProto<StatusResponseMsg>();
+    slave.registerRequest<SetLedMsg>();
+    slave.registerRequest<SetPwmMsg>();
+    slave.registerRequest<GetStatusMsg>();
+    slave.registerResponse<StatusResponseMsg>();
     
     // Setup handlers
     slave.onReceive<SetLedMsg>([](const SetLedMsg& msg) {
+        USB.printf("SLAVE: Message LED reçu, état=%d\n", msg.state);
         stats.messagesReceived++;
     });
     
     slave.onReceive<SetPwmMsg>([](const SetPwmMsg& msg) {
-        stats.ackReceived++;
+        USB.printf("SLAVE: Message PWM reçu, pin=%d, freq=%lu\n", msg.pin, msg.freq);
+        stats.acksReceived++;
     });
     
     slave.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp) {
+        USB.printf("SLAVE: Requête status reçue\n");
         stats.requestsReceived++;
         resp.state = 1;
         resp.uptime = millis();
@@ -240,12 +250,10 @@ void setup() {
         1  // Core 1
     );
     
-    USB.println("Setup complete, starting stress test...");
+    USB.println("Configuration terminée, début des tests...\n");
 }
 
 void loop() {
     // Main loop does nothing, everything happens in tasks
     vTaskDelete(NULL);
 } 
-
-#endif

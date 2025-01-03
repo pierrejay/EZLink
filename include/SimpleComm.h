@@ -8,7 +8,6 @@
 // Add support for custom communication layer (UART, SPI, ... => simple byte input/output ?)
 // Decouple processing messages from the communication layer (queue + custom buffers or handlers ?)  
 // Support validation of the full message structure (hash ?)
-// Add more CRC options
 
 /**
  * SimpleComm - Simple communication protocol
@@ -56,21 +55,25 @@
  * communication patterns.
  */
 
+namespace SimpleComm_C {
+    // Buffer/frame size
+    static constexpr size_t MAX_FRAME_SIZE = 32;
+    // Frame format
+    static constexpr uint8_t START_OF_FRAME = 0xAA;
+    static constexpr size_t FRAME_OVERHEAD = 5;      // SOF + LEN + FC + CRC*2
+    // FC constants
+    static constexpr uint8_t NULL_FC = 0;  // FC=0 reserved/invalid
+    static constexpr uint8_t MAX_PROTOS = 10;  // Maximum number of protos
+    static constexpr uint8_t FC_RESPONSE_BIT = 0x80;  // Bit 7 set pour les réponses
+    static constexpr uint8_t FC_MAX_USER = 0x7F;      // 127 FC utilisateur max (0-127)
+    // Default timeouts
+    static constexpr uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // Wait max 500ms for a response
+} // namespace SimpleComm_C
+
+using namespace SimpleComm_C;
+
 class SimpleComm {
 public:
-    // Buffer/frame size
-    static constexpr inline size_t MAX_FRAME_SIZE = 32;
-    // Frame format
-    static constexpr inline uint8_t START_OF_FRAME = 0xAA;
-    static constexpr inline uint8_t FRAME_HEADER_SIZE = 2;  // SOF + LEN
-    static constexpr inline size_t FRAME_OVERHEAD = 5;      // SOF + LEN + FC + CRC*2
-    // FC constants
-    static constexpr inline uint8_t NULL_FC = 0;  // FC=0 reserved/invalid
-    static constexpr inline uint8_t MAX_PROTOS = 10;  // Maximum number of protos
-    static constexpr inline uint8_t FC_RESPONSE_BIT = 0x80;  // Bit 7 set pour les réponses
-    static constexpr inline uint8_t FC_MAX_USER = 0x7F;      // 127 FC utilisateur max (0-127)
-    // Default timeouts
-    static constexpr inline uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // Wait max 500ms for a response
     
     // Proto types
     enum class ProtoType {
@@ -469,9 +472,6 @@ private:
         return Success(T::fc);
     }
 
-    // Ring buffer constants
-    static constexpr uint8_t SOF_NOT_FOUND = 255;
-
     // Ring buffer pour la réception
     RingBuffer<uint8_t, MAX_FRAME_SIZE> rxBuffer;
 
@@ -530,16 +530,18 @@ private:
             tempFrame[i] = rxBuffer.peek(i);
         }
 
-        // Vérifier CRC
+        // Valider CRC en premier avant de vérifier le contenu
         uint16_t receivedCRC = ((uint16_t)tempFrame[frameSize-2] << 8) | tempFrame[frameSize-1];
         uint16_t calculatedCRC = calculateCRC16(tempFrame, frameSize-2);
-
         if (receivedCRC != calculatedCRC) {
             frameCapturePending = false;
             // CRC invalide, peut être une frame tronquée suivie d'une frame valide, 
             // on jette le SOF et on essaie de glisser jusqu'au prochain.
-            // Si ce n'était pas une frame tronquée, elle sera traitée au prochain poll()
-            // et on aura une erreur LEN ou CRC.
+            // - Si c'était une frame tronquée, la suivante sera traitée au prochain poll().
+            // - Si ce n'était pas une frame tronquée, on peut tomber sur un SOF présent
+            //   dans les données de la frame invalide, il sera rejeté.
+            // Dans tous les cas, on ne jette aucune frame valide, tant qu'on appelle
+            // régulièrement poll() on finira par tomber sur le SOF d'une frame valide.
             rxBuffer.dump(1);
             rxBuffer.slideTo(START_OF_FRAME);
             return Error(ERR_CRC);
