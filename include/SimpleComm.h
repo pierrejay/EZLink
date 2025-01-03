@@ -55,25 +55,39 @@
  * communication patterns.
  */
 
-namespace SimpleComm_C {
-    // Buffer/frame size
-    static constexpr size_t MAX_FRAME_SIZE = 32;
+#ifndef UNIT_TESTING
+// For running on hardware, we define constants behind a namespace to avoid
+// pollution as inline constants are not supported by C++11
+namespace SimpleCommDef {
     // Frame format
-    static constexpr uint8_t START_OF_FRAME = 0xAA;
-    static constexpr size_t FRAME_OVERHEAD = 5;      // SOF + LEN + FC + CRC*2
+    static constexpr size_t MAX_FRAME_SIZE = 32;      // Defines max RX buffer size
+    static constexpr uint8_t START_OF_FRAME = 0xAA;   // Start Of Frame marker
+    static constexpr size_t FRAME_OVERHEAD = 5;       // SOF + LEN + FC + CRC*2
     // FC constants
-    static constexpr uint8_t NULL_FC = 0;  // FC=0 reserved/invalid
-    static constexpr uint8_t MAX_PROTOS = 10;  // Maximum number of protos
-    static constexpr uint8_t FC_RESPONSE_BIT = 0x80;  // Bit 7 set pour les réponses
-    static constexpr uint8_t FC_MAX_USER = 0x7F;      // 127 FC utilisateur max (0-127)
+    static constexpr uint8_t NULL_FC = 0;             // FC=0 reserved/invalid
+    static constexpr uint8_t MAX_PROTOS = 10;         // Maximum number of protos registered overall
+    static constexpr uint8_t FC_RESPONSE_BIT = 0x80;  // Bit 7 set for responses
+    static constexpr uint8_t FC_MAX_USER = 0x7F;      // Max 127 user-defined FC (1-127)
     // Default timeouts
     static constexpr uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // Wait max 500ms for a response
-} // namespace SimpleComm_C
-
-using namespace SimpleComm_C;
+}
+using namespace SimpleCommDef; // We use the namespace right away to keep the syntax clean
+#endif
 
 class SimpleComm {
 public:
+    // For tests, we can use the modern 'static constexpr inline' syntax
+    // to access constants values from test code
+    #ifdef UNIT_TESTING
+        static constexpr inline size_t MAX_FRAME_SIZE = 32;
+        static constexpr inline uint8_t START_OF_FRAME = 0xAA;
+        static constexpr inline size_t FRAME_OVERHEAD = 5;
+        static constexpr inline uint8_t NULL_FC = 0;
+        static constexpr inline uint8_t MAX_PROTOS = 10;
+        static constexpr inline uint8_t FC_RESPONSE_BIT = 0x80;
+        static constexpr inline uint8_t FC_MAX_USER = 0x7F;
+        static constexpr inline uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;
+    #endif
     
     // Proto types
     enum class ProtoType {
@@ -371,7 +385,6 @@ public:
         return crc;
     }
 
-
 private:
     // Structure to store message prototypes
     struct ProtoStore {
@@ -476,6 +489,9 @@ private:
     RingBuffer<uint8_t, MAX_FRAME_SIZE> rxBuffer;
 
     Result captureFrame(uint8_t expectedFc = 0, uint8_t* outFrame = nullptr, size_t* outLen = nullptr) {
+
+        const uint8_t sof = START_OF_FRAME;
+
         // D'abord on lit tout ce qui est disponible sur le port série
         while (serial->available() && rxBuffer.size() < MAX_FRAME_SIZE) {
             rxBuffer.push(serial->read());
@@ -494,9 +510,9 @@ private:
             }
             
             // L'octet courant doit être un SOF
-            if (rxBuffer.peek(0) != START_OF_FRAME) {
+            if (rxBuffer.peek(0) != sof) {
                 // Sinon on essaye de glisser jusqu'au prochain SOF
-                rxBuffer.slideTo(START_OF_FRAME);
+                rxBuffer.slideTo(sof); 
                 return Error(ERR_INVALID_SOF);
             }
             
@@ -515,7 +531,7 @@ private:
             // Si LEN invalide, on jette le SOF
             rxBuffer.dump(1);
             // On essaye de glisser jusqu'au prochain SOF
-            rxBuffer.slideTo(START_OF_FRAME);
+            rxBuffer.slideTo(sof);
             return Error(ERR_INVALID_LEN);
         }
 
@@ -543,7 +559,7 @@ private:
             // Dans tous les cas, on ne jette aucune frame valide, tant qu'on appelle
             // régulièrement poll() on finira par tomber sur le SOF d'une frame valide.
             rxBuffer.dump(1);
-            rxBuffer.slideTo(START_OF_FRAME);
+            rxBuffer.slideTo(sof);
             return Error(ERR_CRC);
         }
 
@@ -553,7 +569,7 @@ private:
             frameCapturePending = false;
             // FC invalide, on jette la frame entière et on essaie de glisser jusqu'au prochain SOF
             rxBuffer.dump(frameSize);
-            rxBuffer.slideTo(START_OF_FRAME);
+            rxBuffer.slideTo(sof);
             return Error(ERR_INVALID_FC, fc);
         }
 
