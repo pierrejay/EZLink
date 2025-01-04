@@ -17,6 +17,69 @@ SimpleComm slave(&Serial2, 500, &Serial, "SLAVE");
 
 TaskHandle_t slaveTask = NULL;
 
+// Message avec payload maximum
+struct MaxPayloadMsg {
+    static constexpr ProtoType type = ProtoType::FIRE_AND_FORGET;
+    static constexpr const char* name = "MAX_PAYLOAD";
+    static constexpr uint8_t fc = 10;
+    uint8_t data[MAX_FRAME_SIZE - FRAME_OVERHEAD];  // Taille maximale possible
+} __attribute__((packed));
+
+// Message avec payload vide
+struct EmptyMsg {
+    static constexpr ProtoType type = ProtoType::FIRE_AND_FORGET;
+    static constexpr const char* name = "EMPTY";
+    static constexpr uint8_t fc = 11;
+    // Pas de données !
+} __attribute__((packed));
+
+// Message pour test en rafale
+struct BurstMsg {
+    static constexpr ProtoType type = ProtoType::ACK_REQUIRED;  // On utilise ACK pour vérifier la réception
+    static constexpr const char* name = "BURST";
+    static constexpr uint8_t fc = 12;
+    uint32_t sequence;  // Numéro de séquence pour vérifier l'ordre
+} __attribute__((packed));
+
+// Messages pour test bidirectionnel
+struct PongMsg {
+    static constexpr ProtoType type = ProtoType::RESPONSE;
+    static constexpr const char* name = "PONG";
+    static constexpr uint8_t fc = 13;
+    uint32_t echo_timestamp;
+    uint32_t response_timestamp;
+} __attribute__((packed));
+
+struct PingMsg {
+    static constexpr ProtoType type = ProtoType::REQUEST;
+    static constexpr const char* name = "PING";
+    static constexpr uint8_t fc = 13;
+    uint32_t timestamp;
+    using ResponseType = PongMsg;
+} __attribute__((packed));
+
+// Fonction utilitaire pour envoyer une frame personnalisée
+void sendCustomFrame(HardwareSerial* serial, uint8_t sof, uint8_t len, uint8_t fc, const std::vector<uint8_t>& payload, uint16_t crc = 0) {
+    // Construire la frame sans CRC
+    std::vector<uint8_t> frame;
+    frame.push_back(sof);
+    frame.push_back(len);
+    frame.push_back(fc);
+    frame.insert(frame.end(), payload.begin(), payload.end());
+
+    // Si crc == 0, on le calcule sur la frame complète
+    if(crc == 0) {
+        crc = SimpleComm::calculateCRC16(frame.data(), frame.size());
+    }
+    
+    // Ajouter le CRC
+    frame.push_back(static_cast<uint8_t>(crc >> 8));
+    frame.push_back(static_cast<uint8_t>(crc & 0xFF));
+
+    serial->write(frame.data(), frame.size());
+    serial->flush();
+}
+
 void testsInit() {
     // Debug port
     Serial.begin(115200);
@@ -26,6 +89,7 @@ void testsInit() {
     Serial2.begin(115200, SERIAL_8N1, UART2_RX, UART2_TX);
     delay(10);  // Let UARTs stabilize
 
+    // Setup communication
     master.begin();
     slave.begin();
 
@@ -40,6 +104,7 @@ void testsInit() {
     slave.registerResponse<StatusResponseMsg>();
 }
 
+// Slave task that polls continuously (to be started on purpose if required)
 void startSlaveTask() {
     xTaskCreatePinnedToCore(
         [](void* parameter) {
@@ -65,12 +130,13 @@ void startSlaveTask() {
 }
 
 void setUp(void) {
-    // Reset all RX buffers
+    // Reset all RX buffers before each test
     master.begin();
     slave.begin();
 }
 
 void tearDown(void) {
+    // Stop slave task after each testif running
     if (slaveTask != NULL) {
         vTaskDelete(slaveTask);
         slaveTask = NULL;
@@ -126,7 +192,6 @@ void test_ack_required() {
 }
 
 void test_request_response() {
-    Serial.println("Début test_request_response");
     startSlaveTask(); // Start slave task
     
     slave.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp) {
@@ -135,20 +200,284 @@ void test_request_response() {
         resp.uptime = 1000;
     });
 
-    // Attendre que la tâche slave soit bien démarrée et stable
-    delay(50);  // Ajouter un délai plus long
+    // Wait for slave task to be well started and stable
+    delay(50);
 
-    Serial.println("Envoi requête");
     GetStatusMsg req;
     StatusResponseMsg resp;
     auto result = master.sendRequest(req, resp);
     
-    Serial.println("Requête terminée");
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
     TEST_ASSERT_EQUAL(1, resp.state);
     TEST_ASSERT_EQUAL(1000, resp.uptime);
 
-    Serial.println("Fin test_request_response");
+}
+
+// Les tests de robustesse
+void test_max_payload() {
+    Serial.println("Début test_max_payload");
+    
+    // Enregistrer les messages pour ce test
+    master.registerRequest<MaxPayloadMsg>();
+    slave.registerRequest<MaxPayloadMsg>();
+    
+    startSlaveTask();  // Démarrer la tâche slave
+    
+    bool messageReceived = false;
+    MaxPayloadMsg msg;
+    
+    // Remplir le payload avec un pattern reconnaissable
+    for(size_t i = 0; i < sizeof(msg.data); i++) {
+        msg.data[i] = i & 0xFF;
+    }
+    
+    // Setup handler
+    slave.onReceive<MaxPayloadMsg>([&messageReceived, &msg](const MaxPayloadMsg& received) {
+        messageReceived = true;
+        // Vérifier que le pattern est intact
+        for(size_t i = 0; i < sizeof(msg.data); i++) {
+            TEST_ASSERT_EQUAL(i & 0xFF, received.data[i]);
+        }
+    });
+    
+    auto result = master.sendMsg(msg);
+    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    
+    delay(50);  // Laisser le temps au slave de traiter
+    TEST_ASSERT_TRUE(messageReceived);
+}
+
+void test_empty_payload() {
+    Serial.println("Début test_empty_payload");
+    
+    // Enregistrer les messages pour ce test
+    master.registerRequest<EmptyMsg>();
+    slave.registerRequest<EmptyMsg>();
+    
+    startSlaveTask();
+    
+    bool messageReceived = false;
+    EmptyMsg msg;
+    
+    slave.onReceive<EmptyMsg>([&messageReceived](const EmptyMsg& received) {
+        messageReceived = true;
+    });
+    
+    auto result = master.sendMsg(msg);
+    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    
+    delay(50);
+    TEST_ASSERT_TRUE(messageReceived);
+}
+
+void test_burst_messages() {
+    Serial.println("Début test_burst_messages");
+    
+    // Enregistrer les messages pour ce test
+    master.registerRequest<BurstMsg>();
+    slave.registerRequest<BurstMsg>();
+    
+    startSlaveTask();
+    
+    const int NUM_MESSAGES = 10;
+    int receivedCount = 0;
+    
+    slave.onReceive<BurstMsg>([&receivedCount](const BurstMsg& msg) {
+        TEST_ASSERT_EQUAL(receivedCount, msg.sequence);
+        receivedCount++;
+    });
+    
+    // Envoyer les messages en rafale
+    for(int i = 0; i < NUM_MESSAGES; i++) {
+        BurstMsg msg;
+        msg.sequence = i;
+        auto result = master.sendMsgAck(msg);  // On utilise ACK pour s'assurer de la réception
+        TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    }
+    
+    delay(100);  // Laisser le temps au traitement
+    TEST_ASSERT_EQUAL(NUM_MESSAGES, receivedCount);
+}
+
+void test_bidirectional() {
+    Serial.println("Début test_bidirectional");
+    
+    // Enregistrer les messages pour ce test - attention à l'ordre !
+    master.registerRequest<PingMsg>();
+    master.registerResponse<PongMsg>();
+    slave.registerRequest<PingMsg>();
+    slave.registerResponse<PongMsg>();
+
+    
+    startSlaveTask();
+    
+    // Setup slave handler
+    slave.onRequest<PingMsg>([](const PingMsg& req, PongMsg& resp) {
+        resp.echo_timestamp = req.timestamp;
+        resp.response_timestamp = millis();
+    });
+    
+    const int NUM_PINGS = 5;
+    for(int i = 0; i < NUM_PINGS; i++) {
+        // Envoyer un ping
+        PingMsg ping;
+        ping.timestamp = millis();
+        PongMsg pong;
+        
+        auto result = master.sendRequest(ping, pong);
+        TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+        uint32_t request_time = ping.timestamp;
+        uint32_t response_time = pong.response_timestamp;
+        TEST_ASSERT_GREATER_THAN(0, request_time);
+        TEST_ASSERT_GREATER_THAN(request_time, response_time);
+        
+        delay(10);  // Petit délai entre les pings
+    }
+}
+
+void test_response_timeout() {
+    Serial.println("Début test_response_timeout");
+    
+    // Ne pas démarrer la tâche slave pour simuler un timeout
+    GetStatusMsg req;
+    StatusResponseMsg resp;
+    auto result = master.sendRequest(req, resp);
+    
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_TIMEOUT, result.status);
+}
+
+void test_corrupted_crc() {
+    Serial.println("Début test_corrupted_crc");
+    
+    // Le master envoie un message avec CRC invalide au slave
+    std::vector<uint8_t> data = {0x01};  // Exemple de données
+    uint16_t invalidCRC = 0xFFFF;  // CRC invalide
+    sendCustomFrame(&Serial1, START_OF_FRAME, data.size() + FRAME_OVERHEAD, data.size(), data, invalidCRC);
+    
+    // Le slave doit détecter l'erreur
+    delay(20);  // Laisser le temps à la transmission UART
+    auto result = slave.poll();
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_CRC, result.status);
+}
+
+void test_truncated_message() {
+    Serial.println("Début test_truncated_message");
+    
+    // Enregistrer le message pour le test valide
+    master.registerRequest<SetLedMsg>();
+    slave.registerRequest<SetLedMsg>();
+    
+    // 1. Envoyer un message tronqué : on annonce une longueur de 12 (0x0C) mais on envoie moins
+    std::vector<uint8_t> truncated_data = {0x01, 0x42};  // FC + payload
+    sendCustomFrame(&Serial1, START_OF_FRAME, 0x0C, 0x01, truncated_data, 0);
+    
+    // 2. Envoyer un message valide (SetLedMsg)
+    SetLedMsg msg{.state = 1};
+    master.sendMsg(msg);
+    
+    delay(20);
+    
+    // 3. Premier poll() doit détecter l'erreur CRC (car il lira des données du message suivant)
+    auto result = slave.poll();
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_CRC, result.status);
+    
+    // 4. Continuer à poller jusqu'à avoir traité tous les messages
+    bool success_found = false;
+    while(true) {
+        result = slave.poll();
+        if(result.status == SimpleComm::SUCCESS) {
+            success_found = true;
+        }
+        else if(result.status == SimpleComm::NOTHING_TO_DO) {
+            break;
+        }
+        // On ignore les autres erreurs potentielles (invalid SOF etc)
+    }
+    
+    // On doit avoir trouvé au moins un message valide
+    TEST_ASSERT_TRUE(success_found);
+}
+
+void test_invalid_sof() {
+    Serial.println("Début test_invalid_sof");
+    
+    // Envoyer un message avec un SOF incorrect
+    std::vector<uint8_t> data = {0x01, 0x02, 0x03};  // Exemple de données
+    uint16_t crc = SimpleComm::calculateCRC16(data.data(), data.size());
+    sendCustomFrame(&Serial1, 0x55, data.size() + FRAME_OVERHEAD, data.size(), data, crc);  // SOF incorrect
+    
+    // Poller pour vérifier l'erreur
+    delay(20);  // Laisser le temps à la transmission UART
+    auto result = slave.poll();
+    bool got_invalid_sof = (result.status == SimpleComm::ERR_RCV_INVALID_SOF);
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_INVALID_SOF, result.status);
+}
+
+void test_invalid_length() {
+    Serial.println("Début test_invalid_length");
+    
+    // Envoyer un message avec une longueur incorrecte
+    std::vector<uint8_t> data = {0x01, 0x02, 0x03};  // Exemple de données
+    uint16_t crc = SimpleComm::calculateCRC16(data.data(), data.size());
+    sendCustomFrame(&Serial1, START_OF_FRAME, 255, data.size(), data, crc);  // Longueur incorrecte
+    
+    // Poller pour vérifier l'erreur
+    delay(20);  // Laisser le temps à la transmission UART
+    auto result = slave.poll();
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_INVALID_LEN, result.status);
+}
+
+void test_unexpected_response() {
+    Serial.println("Début test_unexpected_response");
+    
+    // Ici c'est différent : le slave envoie une réponse inattendue au master
+    std::vector<uint8_t> payload = {0x42};  // Données quelconques
+    sendCustomFrame(&Serial2, START_OF_FRAME, 6, 0x81, payload, 0);  // FC avec bit de réponse
+    
+    // Le master doit détecter l'erreur
+    delay(20);  // Laisser le temps à la transmission UART
+    auto result = master.poll();
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_UNEXPECTED_RESPONSE, result.status);
+}
+
+void test_oversized_message() {
+    Serial.println("Début test_oversized_message");
+    
+    // Enregistrer le message pour le test valide
+    master.registerRequest<SetLedMsg>();
+    slave.registerRequest<SetLedMsg>();
+    
+    // 1. Envoyer un message plus long que sa LEN indiquée
+    std::vector<uint8_t> oversized_data = {0x01, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48};  // 8 bytes de données
+    sendCustomFrame(&Serial1, START_OF_FRAME, 0x05, 0x01, oversized_data, 0);  // LEN = 5 mais données plus longues
+    
+    // 2. Envoyer un message valide (SetLedMsg)
+    SetLedMsg msg{.state = 1};
+    master.sendMsg(msg);
+    
+    delay(20);
+    
+    // 3. Premier poll() doit détecter l'erreur CRC
+    auto first_result = slave.poll();
+    bool got_crc_error = (first_result.status == SimpleComm::ERR_RCV_CRC);
+
+    // 4. Continuer à poller jusqu'à avoir traité tous les messages
+    bool success_found = false;
+    while(true) {
+        auto result = slave.poll();
+        if(result.status == SimpleComm::SUCCESS) {
+            success_found = true;
+        }
+        else if(result.status == SimpleComm::NOTHING_TO_DO) {
+            break;
+        }
+        // yield();
+        // On peut avoir plusieurs erreurs CRC avant de trouver le message valide
+    }
+    
+    // Faire les assertions APRÈS la boucle
+    TEST_ASSERT_TRUE(got_crc_error);
+    TEST_ASSERT_TRUE(success_found);
 }
 
 void setup() {
@@ -161,9 +490,23 @@ void setup() {
     RUN_TEST(test_ack_required);
     RUN_TEST(test_request_response);
     
+    // Nouveaux tests de robustesse
+    RUN_TEST(test_max_payload);
+    RUN_TEST(test_empty_payload);
+    RUN_TEST(test_burst_messages);
+    RUN_TEST(test_bidirectional);
+    
+    // Nouveaux tests d'erreur
+    RUN_TEST(test_response_timeout);
+    RUN_TEST(test_corrupted_crc);
+    RUN_TEST(test_truncated_message);
+    RUN_TEST(test_invalid_sof);
+    RUN_TEST(test_invalid_length);
+    RUN_TEST(test_unexpected_response);
+    // RUN_TEST(test_oversized_message);
     UNITY_END();
     
-    // Cleanup final
+    // Final cleanup
     if (slaveTask != NULL) {
         vTaskDelete(slaveTask);
         slaveTask = NULL;
@@ -172,4 +515,6 @@ void setup() {
 
 void loop() {
     // Nothing to do
+    Serial.println("Idle...");
+    delay(1000);
 } 

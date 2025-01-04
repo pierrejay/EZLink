@@ -111,6 +111,7 @@ using namespace SimpleCommDef; // We use the namespace right away to keep the sy
 #endif
 
 class SimpleComm {
+    
 public:
     // For tests, we can use the modern 'static constexpr inline' syntax
     // to access constants values from test code
