@@ -14,7 +14,7 @@
 #define USB Serial
 
 // Délais et périodes
-#define MASTER_DELAY_MS 2000  // 2s entre chaque test
+#define MASTER_DELAY_MS 500  // 2s entre chaque test
 #define SLAVE_DELAY_MS 10     // 10ms entre les polls
 
 // Queue pour les messages de log

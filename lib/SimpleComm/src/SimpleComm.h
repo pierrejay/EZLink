@@ -4,13 +4,14 @@
 #include <type_traits>
 #include "ScrollBuffer.h"
 
-#define SIMPLECOMM_DEBUG
-#define SIMPLECOMM_DEBUG_TAG "DBG"
+// #define SIMPLECOMM_DEBUG
+// #define SIMPLECOMM_DEBUG_TAG "DBG"
 
-// TODO FOR NEXT VERSIONS:
-// Add support for custom communication layer (UART, SPI, ... => simple byte input/output ?)
-// Decouple processing messages from the communication layer (queue + custom buffers or handlers ?)  
-// Support validation of the full message structure (hash ?)
+// TODO:
+// 1. Implement no-lock SPSC buffer
+// 2. Decouple communication layer w/ byte input/output ("expert mode")
+// 3. Test with STM32F030
+// Later ?: Support validation of the full message structure (hash ?)
 
 /**
  * SimpleComm - Simple communication protocol
@@ -288,25 +289,6 @@ public:
             typename REQ::ResponseType resp;
             // Appeler le handler
             handler(req, resp);
-
-            // // For responses, we flip the FC bit to generate a response with
-            // // the correct FC (FC | 0x80)
-            // uint8_t fc = resp.fc;
-            // fc |= FC_RESPONSE_BIT;
-
-            // // Check if the response FC is registered
-            // Result protoCheck = checkProto<typename REQ::ResponseType>(fc);
-            // if (protoCheck != SUCCESS) {
-            //     #ifdef SIMPLECOMM_DEBUG
-            //     debugPrintf("Erreur validation proto response FC=0x%02X, code=%d", REQ::fc, protoCheck.status);
-            //     #endif
-            //     return protoCheck;
-            // }
-
-            // // Extract the data from the response
-            // uint8_t data;
-            // size_t dataLen;
-            // extractData(resp, fc, data, dataLen);
 
             // Envoyer la réponse automatiquement
             Result result = sendMsgInternal(resp, true);
@@ -666,6 +648,7 @@ private:
     template<typename T>
     Result sendMsgInternal(const T& msg, bool flipFc = false) {
 
+        // Define FC, flip if needed (for responses)
         uint8_t fc = msg.fc;
         if (flipFc) fc |= FC_RESPONSE_BIT;
 
@@ -677,11 +660,6 @@ private:
             #endif
             return protoCheck;
         }
-
-        //Extract data from message
-        uint8_t data[MAX_FRAME_SIZE];
-        size_t dataLen;
-        extractData(msg, data, dataLen);
 
         // Send frame
         return sendFrame(fc, (uint8_t*)&msg, sizeof(T));
