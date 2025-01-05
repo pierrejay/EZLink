@@ -4,6 +4,7 @@
 #include <type_traits>
 #include "ScrollBuffer.h"
 
+// Uncomment to enable debug
 // #define SIMPLECOMM_DEBUG
 // #define SIMPLECOMM_DEBUG_TAG "DBG"
 

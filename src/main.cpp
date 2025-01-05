@@ -141,11 +141,11 @@ ThreadSafeLogStream threadSafeLog;
 
 // Communication instances
 #ifdef SIMPLECOMM_DEBUG
-SimpleComm master(&UART1, DEFAULT_RESPONSE_TIMEOUT_MS, &threadSafeLog, "MASTER");
-SimpleComm slave(&UART2, DEFAULT_RESPONSE_TIMEOUT_MS, &threadSafeLog, "SLAVE");
+SimpleComm master(&UART1, SimpleCommDfs::DEFAULT_RESPONSE_TIMEOUT_MS, &threadSafeLog, "MASTER");
+SimpleComm slave(&UART2, SimpleCommDfs::DEFAULT_RESPONSE_TIMEOUT_MS, &threadSafeLog, "SLAVE");
 #else
-SimpleComm master(&UART1, DEFAULT_RESPONSE_TIMEOUT_MS);
-SimpleComm slave(&UART2, DEFAULT_RESPONSE_TIMEOUT_MS);
+SimpleComm master(&UART1, SimpleCommDfs::DEFAULT_RESPONSE_TIMEOUT_MS);
+SimpleComm slave(&UART2, SimpleCommDfs::DEFAULT_RESPONSE_TIMEOUT_MS);
 #endif
 
 // État du test en cours
