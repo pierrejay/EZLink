@@ -480,30 +480,170 @@ void test_oversized_message() {
     TEST_ASSERT_TRUE(success_found);
 }
 
+// Buffer circulaire simple pour simuler un UART hardware
+class MockUartBuffer {
+private:
+    static constexpr size_t SIZE = 256;
+    uint8_t buffer[SIZE];
+    volatile size_t head = 0;
+    volatile size_t tail = 0;
+
+public:
+    size_t write(const uint8_t* data, size_t len) {
+        size_t written = 0;
+        for(size_t i = 0; i < len; i++) {
+            size_t next = (head + 1) % SIZE;
+            if(next != tail) {
+                buffer[head] = data[i];
+                head = next;
+                written++;
+            }
+        }
+        return written;
+    }
+
+    size_t read(uint8_t* data, size_t maxLen) {
+        size_t read = 0;
+        while(read < maxLen && tail != head) {
+            data[read++] = buffer[tail];
+            tail = (tail + 1) % SIZE;
+        }
+        return read;
+    }
+};
+
+void test_custom_callbacks() {
+    Serial.println("Début test_custom_callbacks");
+
+    static MockUartBuffer masterToSlave;
+    static MockUartBuffer slaveToMaster;
+    TaskHandle_t callbackSlaveTask = NULL;  // Handle local au test
+
+    // Créer les instances master et slave
+    SimpleComm master(
+        [](const uint8_t* data, size_t len) {
+            return masterToSlave.write(data, len);
+        },
+        [](uint8_t* data, size_t maxLen) {
+            return slaveToMaster.read(data, maxLen);
+        }
+    );
+
+    SimpleComm slave(
+        [](const uint8_t* data, size_t len) {
+            return slaveToMaster.write(data, len);
+        },
+        [](uint8_t* data, size_t maxLen) {
+            return masterToSlave.read(data, maxLen);
+        }
+    );
+
+    // Enregistrer les messages sur les deux instances
+    master.registerRequest<SetLedMsg>();
+    master.registerRequest<SetPwmMsg>();
+    master.registerRequest<GetStatusMsg>();
+    master.registerResponse<StatusResponseMsg>();
+
+    slave.registerRequest<SetLedMsg>();
+    slave.registerRequest<SetPwmMsg>();
+    slave.registerRequest<GetStatusMsg>();
+    slave.registerResponse<StatusResponseMsg>();
+
+    // Configurer les handlers sur le slave
+    bool messageLedReceived = false;
+    slave.onReceive<SetLedMsg>([&messageLedReceived](const SetLedMsg& msg) {
+        messageLedReceived = true;
+        TEST_ASSERT_EQUAL(1, msg.state);
+    });
+
+    slave.onReceive<SetPwmMsg>([](const SetPwmMsg& msg) {
+        TEST_ASSERT_EQUAL(1000, msg.freq);
+    });
+
+    slave.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp) {
+        resp.state = 1;
+        resp.uptime = 1000;
+    });
+
+    // Démarrer la tâche slave spécifique à ce test
+    xTaskCreatePinnedToCore(
+        [](void* parameter) {
+            SimpleComm* slaveInstance = (SimpleComm*)parameter;
+            while(true) {
+                auto result = slaveInstance->poll();
+                if(result == SimpleComm::SUCCESS) {
+                    Serial.println("Callback slave: message traité");
+                }
+                else if(result != SimpleComm::NOTHING_TO_DO) {
+                    Serial.printf("Callback slave: erreur poll %d\n", result.status);
+                }
+                vTaskDelay(pdMS_TO_TICKS(SLAVE_DELAY_MS));
+            }
+        },
+        "callbackSlaveTask",
+        10000,
+        &slave,  // Passe l'instance locale
+        1,
+        &callbackSlaveTask,
+        1
+    );
+
+    // Test 1: MESSAGE simple
+    SetLedMsg ledMsg{.state = 1};
+    auto resultSendLed = master.sendMsg(ledMsg);
+    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, resultSendLed.status);
+
+    delay(50);  // Laisser le temps au slave de traiter
+    TEST_ASSERT_TRUE(messageLedReceived);
+
+    // Test 2: MESSAGE_ACK
+    SetPwmMsg pwmMsg{.pin = 1, .freq = 1000};
+    auto resultSendPwm = master.sendMsgAck(pwmMsg);
+    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, resultSendPwm.status);
+
+    // Test 3: REQUEST/RESPONSE
+    GetStatusMsg req;
+    StatusResponseMsg resp;
+    auto resultRequest = master.sendRequest(req, resp);
+    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, resultRequest.status);
+    TEST_ASSERT_EQUAL(1, resp.state);
+    TEST_ASSERT_EQUAL(1000, resp.uptime);
+
+    // Cleanup spécifique à ce test
+    if (callbackSlaveTask != NULL) {
+        vTaskDelete(callbackSlaveTask);
+        callbackSlaveTask = NULL;
+    }
+}
+
 void setup() {
     delay(2000);  // Give monitor time to connect
     testsInit(); // Initialize hardware
     
     UNITY_BEGIN();
     
+    // Tests de base
     RUN_TEST(test_basic_communication);
     RUN_TEST(test_ack_required);
     RUN_TEST(test_request_response);
     
-    // Nouveaux tests de robustesse
+    // Tests de robustesse
     RUN_TEST(test_max_payload);
     RUN_TEST(test_empty_payload);
     RUN_TEST(test_burst_messages);
     RUN_TEST(test_bidirectional);
     
-    // Nouveaux tests d'erreur
+    // Tests avancés
     RUN_TEST(test_response_timeout);
     RUN_TEST(test_corrupted_crc);
     RUN_TEST(test_truncated_message);
     RUN_TEST(test_invalid_sof);
     RUN_TEST(test_invalid_length);
     RUN_TEST(test_unexpected_response);
-    // RUN_TEST(test_oversized_message);
+    RUN_TEST(test_oversized_message);
+
+    // Tests avec callbacks custom
+    RUN_TEST(test_custom_callbacks);
     UNITY_END();
     
     // Final cleanup

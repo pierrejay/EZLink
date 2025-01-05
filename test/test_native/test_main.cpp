@@ -482,7 +482,7 @@ void test_buffer_limits(void) {
     serial.setAvailableForWrite(2);   // Simulate almost full buffer
     SetLedMsg msg{.state = 1};
     result = comm.sendMsg(msg);
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_SND_OVERFLOW, result.status);
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_HW_TX_FAILED, result.status);
 }
 
 void test_set_timeout(void) {
@@ -577,7 +577,7 @@ void test_size_limits(void) {
     serial.setAvailableForWrite(sizeof(MinimalMsg) + SimpleCommDfs::FRAME_OVERHEAD - 1);
     MinimalMsg msg{.dummy = 42};
     result = comm.sendMsg(msg);
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_SND_OVERFLOW, result.status);
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_HW_TX_FAILED, result.status);
     
     serial.setAvailableForWrite(sizeof(MinimalMsg) + SimpleCommDfs::FRAME_OVERHEAD);
     result = comm.sendMsg(msg);
