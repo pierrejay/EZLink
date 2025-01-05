@@ -17,19 +17,19 @@
  * SimpleComm - Simple communication protocol
  * 
  * Message types:
- * - FIRE_AND_FORGET: Simple message without response (FC 1-127)
- * - ACK_REQUIRED: Message requiring echo confirmation (FC 1-127, response FC = request FC | 0x80)
+ * - MESSAGE: Simple message without response (FC 1-127)
+ * - MESSAGE_ACK: Message requiring echo confirmation (FC 1-127, response FC = request FC | 0x80)
  * - REQUEST: Message requiring specific response (FC 1-127)
  * - RESPONSE: Response to a REQUEST (FC = request FC | 0x80)
  * 
  * Communication patterns:
- * 1. Synchronous exchanges (ACK_REQUIRED and REQUEST/RESPONSE)
+ * 1. Synchronous exchanges (MESSAGE_ACK and REQUEST/RESPONSE)
  *    - Designed for immediate response expectation
  *    - RX buffer is automatically cleaned before sending to ensure reliable response capture
  *    - Timeout-based waiting for response
  *    - Best suited for command/control scenarios requiring confirmation
  * 
- * 2. Asynchronous exchanges (FIRE_AND_FORGET)
+ * 2. Asynchronous exchanges (MESSAGE)
  *    - No response expected
  *    - No automatic buffer cleaning
  *    - User must implement their own synchronization if needed (e.g. session ID, message ID...)
@@ -74,13 +74,13 @@
  * 
  * Thread safety:
  * The library is not thread-safe by design. In a multithreaded environment:
- * 1. Synchronous operations (ACK_REQUIRED and REQUEST/RESPONSE)
+ * 1. Synchronous operations (MESSAGE_ACK and REQUEST/RESPONSE)
  *    - Must be called from a single thread
  *    - Will automatically clean RX buffer before sending
  *    - Will block until response/timeout
  *    - Consider using a dedicated communication thread
  * 
- * 2. Asynchronous operations (FIRE_AND_FORGET)
+ * 2. Asynchronous operations (MESSAGE)
  *    - Can be safely called from multiple threads
  *    - No automatic buffer cleaning
  *    - No blocking
@@ -115,8 +115,8 @@ public:
 
     // Proto types
     enum class ProtoType {
-        FIRE_AND_FORGET,  // No response expected
-        ACK_REQUIRED,     // Echo expected
+        MESSAGE,  // No response expected
+        MESSAGE_ACK,     // Echo expected
         REQUEST,          // Expect a specific response
         RESPONSE          // Is a response to a request
     };
@@ -224,8 +224,8 @@ public:
     template<typename T>
     Result registerRequest() {
         static_assert(T::type == ProtoType::REQUEST || 
-                     T::type == ProtoType::FIRE_AND_FORGET || 
-                     T::type == ProtoType::ACK_REQUIRED,
+                     T::type == ProtoType::MESSAGE || 
+                     T::type == ProtoType::MESSAGE_ACK,
                      "You tried to register a RESPONSE with registerRequest() - use registerResponse() for RESPONSE types");
         static_assert(T::fc != SimpleCommDfs::NULL_FC, "FC=0 is reserved/invalid");
         static_assert((T::fc & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "Request FC must be <= 127");
@@ -256,12 +256,12 @@ public:
         return registerProtoInternal<T>(T::fc | SimpleCommDfs::FC_RESPONSE_BIT);
     }
 
-    // Handler for FIRE_AND_FORGET and ACK_REQUIRED messages
+    // Handler for MESSAGE and MESSAGE_ACK messages
     template<typename T>
     Result onReceive(std::function<void(const T&)> handler) {
-        static_assert(T::type == ProtoType::FIRE_AND_FORGET || 
-                     T::type == ProtoType::ACK_REQUIRED,
-                     "onReceive only works with FIRE_AND_FORGET or ACK_REQUIRED messages");
+        static_assert(T::type == ProtoType::MESSAGE || 
+                     T::type == ProtoType::MESSAGE_ACK,
+                     "onReceive only works with MESSAGE or MESSAGE_ACK messages");
         return onMessage<T>(handler);
     }
 
@@ -292,10 +292,10 @@ public:
         });
     }
 
-    // Type-safe send for FIRE_AND_FORGET messages
+    // Type-safe send for MESSAGE messages
     template<typename T>
     Result sendMsg(const T& msg) {
-        static_assert(T::type == ProtoType::FIRE_AND_FORGET, "Wrong message type, sendMsg() only works with FIRE_AND_FORGET messages");
+        static_assert(T::type == ProtoType::MESSAGE, "Wrong message type, sendMsg() only works with MESSAGE messages");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert((T::fc & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "FC must be <= 127");
         static_assert(T::fc != SimpleCommDfs::NULL_FC, "FC must not be NULL (0)");  // Check at compilation
@@ -305,7 +305,7 @@ public:
     // Send message and wait for acknowledgement (same message echoed back)
     template<typename T>
     Result sendMsgAck(const T& msg) {
-        static_assert(T::type == ProtoType::ACK_REQUIRED, "Wrong message type, sendMsgAck() only works with ACK_REQUIRED messages");
+        static_assert(T::type == ProtoType::MESSAGE_ACK, "Wrong message type, sendMsgAck() only works with MESSAGE_ACK messages");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert((T::fc & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "FC must be <= 127");
         static_assert(T::fc != SimpleCommDfs::NULL_FC, "FC must not be NULL (0)");  // Check at compilation
@@ -435,10 +435,10 @@ public:
                     proto->callback(&rxBuffer[3]);
                 }
 
-                // Si c'est un message ACK_REQUIRED, envoyer l'ACK automatiquement,
+                // Si c'est un message MESSAGE_ACK, envoyer l'ACK automatiquement,
                 // en flippant le FC
                 uint8_t ackFc = result.fc | SimpleCommDfs::FC_RESPONSE_BIT;
-                if(proto->type == ProtoType::ACK_REQUIRED) {
+                if(proto->type == ProtoType::MESSAGE_ACK) {
                     sendFrame(ackFc, &rxBuffer[3], proto->size);
                 }
             }
@@ -495,7 +495,7 @@ public:
 private:
     // Structure to store message prototypes
     struct ProtoStore {
-        ProtoType type = ProtoType::FIRE_AND_FORGET;
+        ProtoType type = ProtoType::MESSAGE;
         const char* name = nullptr;
         uint8_t fc = SimpleCommDfs::NULL_FC;
         size_t size = 0;

@@ -9,12 +9,12 @@ using ProtoType = SimpleComm::ProtoType;
  * 
  * Examples of using the different types of messages :
  * 
- * 1. FIRE_AND_FORGET : Simple message without response expected
+ * 1. MESSAGE : Simple message without response expected
  *    - Used for simple commands (LED, buzzer...)
  *    - No confirmation of reception
  *    - Ex: SetLedMsg
  * 
- * 2. ACK_REQUIRED : Message requiring confirmation
+ * 2. MESSAGE_ACK : Message requiring confirmation
  *    - The receiver sends back the message identically
  *    - Allows to validate reception
  *    - Ex: SetPwmMsg
@@ -34,17 +34,17 @@ using ProtoType = SimpleComm::ProtoType;
  * 
  */
 
-// Message FIRE_AND_FORGET : simple LED command
+// Message MESSAGE : simple LED command
 struct SetLedMsg {
-    static constexpr ProtoType type = ProtoType::FIRE_AND_FORGET;
+    static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "SET_LED";
     static constexpr uint8_t fc = 1;
     uint8_t state;  // 0=OFF, 1=ON
 } __attribute__((packed));
 
-// Message ACK_REQUIRED : PWM configuration
+// Message MESSAGE_ACK : PWM configuration
 struct SetPwmMsg {
-    static constexpr ProtoType type = ProtoType::ACK_REQUIRED;
+    static constexpr ProtoType type = ProtoType::MESSAGE_ACK;
     static constexpr const char* name = "SET_PWM";
     static constexpr uint8_t fc = 2;
     uint8_t pin;    // Pin number

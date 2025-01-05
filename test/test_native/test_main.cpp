@@ -4,7 +4,7 @@
 
 // Test messages
 struct BorderlineMsg {
-    static constexpr ProtoType type = ProtoType::FIRE_AND_FORGET;
+    static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "BORDERLINE";
     static constexpr uint8_t fc = 10;
     uint8_t data[SimpleCommDfs::MAX_FRAME_SIZE - SimpleCommDfs::FRAME_OVERHEAD];
@@ -12,14 +12,14 @@ struct BorderlineMsg {
 
 struct DuplicateNameMsg {
     static constexpr uint8_t fc = 20;
-    static constexpr ProtoType type = ProtoType::FIRE_AND_FORGET;
+    static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "SET_LED";  // Same name as SetLedMsg
     uint8_t value;
 };
 
 struct SameFcMsg {
     static constexpr uint8_t fc = SetLedMsg::fc;  // Same FC
-    static constexpr ProtoType type = ProtoType::FIRE_AND_FORGET;
+    static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "DIFFERENT";
     uint8_t value;
 };
@@ -27,7 +27,7 @@ struct SameFcMsg {
 // Not used (test blocked at compilation => OK)
 struct NullNameMsg {
     static constexpr uint8_t fc = 30;
-    static constexpr ProtoType type = ProtoType::FIRE_AND_FORGET;
+    static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = nullptr;
     uint8_t value;
 };
@@ -35,14 +35,14 @@ struct NullNameMsg {
 // Not used (test blocked at compilation => OK)
 struct EmptyNameMsg {
     static constexpr uint8_t fc = 31;
-    static constexpr ProtoType type = ProtoType::FIRE_AND_FORGET;
+    static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "";  // Empty string
     uint8_t value;
 };
 
 struct ComplexMsg {
     static constexpr uint8_t fc = 32;
-    static constexpr ProtoType type = ProtoType::FIRE_AND_FORGET;
+    static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "COMPLEX";
     uint32_t array[4];
     int16_t coordinates[3];
@@ -51,7 +51,7 @@ struct ComplexMsg {
 
 struct MinimalMsg {
     static constexpr uint8_t fc = 33;
-    static constexpr ProtoType type = ProtoType::FIRE_AND_FORGET;
+    static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "MINIMAL";
     uint8_t dummy;  // Minimal message of one byte
 };
@@ -101,9 +101,9 @@ private:
     bool autoResponseEnabled = true;  // Par défaut on répond
 
     void prepareAutoResponse() {
-        // We don't prepare auto-response for FIRE_AND_FORGET messages
+        // We don't prepare auto-response for MESSAGE messages
         if (lastMessageFC == SetLedMsg::fc) {
-            return;  // SetLedMsg is FIRE_AND_FORGET
+            return;  // SetLedMsg is MESSAGE
         }
         
         if (lastMessageFC == SetPwmMsg::fc) {
@@ -326,7 +326,7 @@ void test_send_msg(void) {
     
     // Send test without proto registered
     SetPwmMsg pwm{.pin = 1, .freq = 1000};
-    result = comm.sendMsgAck(pwm);  // Use sendMsgAck for ACK_REQUIRED
+    result = comm.sendMsgAck(pwm);  // Use sendMsgAck for MESSAGE_ACK
     TEST_ASSERT_EQUAL(SimpleComm::ERR_SND_INVALID_FC, result.status);
 }
 
@@ -700,8 +700,8 @@ void test_mixed_message_types(void) {
     SimpleComm comm(&serial);
     
     // Register different types of messages
-    comm.registerRequest<SetLedMsg>();        // FIRE_AND_FORGET
-    comm.registerRequest<SetPwmMsg>();        // ACK_REQUIRED
+    comm.registerRequest<SetLedMsg>();        // MESSAGE
+    comm.registerRequest<SetPwmMsg>();        // MESSAGE_ACK
     comm.registerRequest<GetStatusMsg>();     // REQUEST
     comm.registerResponse<StatusResponseMsg>(); // RESPONSE
     
@@ -711,11 +711,11 @@ void test_mixed_message_types(void) {
     GetStatusMsg status{};
     StatusResponseMsg resp{};
     
-    printf("\nTesting FIRE_AND_FORGET message...\n");
+    printf("\nTesting MESSAGE message...\n");
     auto result = comm.sendMsg(led);        
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
     
-    printf("\nTesting ACK_REQUIRED message...\n");
+    printf("\nTesting MESSAGE_ACK message...\n");
     printf("Original FC: 0x%02X\n", SetPwmMsg::fc);
     printf("Expected response FC: 0x%02X\n", SetPwmMsg::fc | SimpleCommDfs::FC_RESPONSE_BIT);
     result = comm.sendMsgAck(pwm);         
@@ -791,7 +791,7 @@ void test_busy_receiving(void) {
     SimpleComm comm(&serial);
     
     // Enregistrer les protos nécessaires
-    comm.registerRequest<SetLedMsg>();  // FIRE_AND_FORGET
+    comm.registerRequest<SetLedMsg>();  // MESSAGE
     
     // Préparer un message incomplet pour simuler une réception en cours
     uint8_t partialFrame[] = {
@@ -817,7 +817,7 @@ void test_busy_receiving(void) {
     // Essayer d'envoyer un message pendant la capture
     printf("TEST: Trying to send while capturing...\n");
     SetLedMsg msg{.state = 1};
-    result = comm.sendMsg(msg);  // FIRE_AND_FORGET ne nettoie pas le buffer
+    result = comm.sendMsg(msg);  // MESSAGE ne nettoie pas le buffer
     printf("TEST: Send result: status=%d, fc=%d\n", result.status, result.fc);
     TEST_ASSERT_EQUAL(SimpleComm::ERR_BUSY_RECEIVING, result.status);
 }

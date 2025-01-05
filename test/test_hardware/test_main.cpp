@@ -19,7 +19,7 @@ TaskHandle_t slaveTask = NULL;
 
 // Message avec payload maximum
 struct MaxPayloadMsg {
-    static constexpr ProtoType type = ProtoType::FIRE_AND_FORGET;
+    static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "MAX_PAYLOAD";
     static constexpr uint8_t fc = 10;
     uint8_t data[SimpleCommDfs::MAX_FRAME_SIZE - SimpleCommDfs::FRAME_OVERHEAD];  // Taille maximale possible
@@ -27,7 +27,7 @@ struct MaxPayloadMsg {
 
 // Message avec payload vide
 struct EmptyMsg {
-    static constexpr ProtoType type = ProtoType::FIRE_AND_FORGET;
+    static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "EMPTY";
     static constexpr uint8_t fc = 11;
     // Pas de données !
@@ -35,7 +35,7 @@ struct EmptyMsg {
 
 // Message pour test en rafale
 struct BurstMsg {
-    static constexpr ProtoType type = ProtoType::ACK_REQUIRED;  // On utilise ACK pour vérifier la réception
+    static constexpr ProtoType type = ProtoType::MESSAGE_ACK;  // On utilise ACK pour vérifier la réception
     static constexpr const char* name = "BURST";
     static constexpr uint8_t fc = 12;
     uint32_t sequence;  // Numéro de séquence pour vérifier l'ordre
