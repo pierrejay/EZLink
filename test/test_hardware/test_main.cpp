@@ -21,7 +21,7 @@ TaskHandle_t slaveTask = NULL;
 struct MaxPayloadMsg {
     static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "MAX_PAYLOAD";
-    static constexpr uint8_t fc = 10;
+    static constexpr uint8_t id = 10;
     uint8_t data[SimpleCommDfs::MAX_FRAME_SIZE - SimpleCommDfs::FRAME_OVERHEAD];  // Taille maximale possible
 } __attribute__((packed));
 
@@ -29,7 +29,7 @@ struct MaxPayloadMsg {
 struct EmptyMsg {
     static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "EMPTY";
-    static constexpr uint8_t fc = 11;
+    static constexpr uint8_t id = 11;
     // Pas de données !
 } __attribute__((packed));
 
@@ -37,7 +37,7 @@ struct EmptyMsg {
 struct BurstMsg {
     static constexpr ProtoType type = ProtoType::MESSAGE_ACK;  // On utilise ACK pour vérifier la réception
     static constexpr const char* name = "BURST";
-    static constexpr uint8_t fc = 12;
+    static constexpr uint8_t id = 12;
     uint32_t sequence;  // Numéro de séquence pour vérifier l'ordre
 } __attribute__((packed));
 
@@ -45,7 +45,7 @@ struct BurstMsg {
 struct PongMsg {
     static constexpr ProtoType type = ProtoType::RESPONSE;
     static constexpr const char* name = "PONG";
-    static constexpr uint8_t fc = 13;
+    static constexpr uint8_t id = 13;
     uint32_t echo_timestamp;
     uint32_t response_timestamp;
 } __attribute__((packed));
@@ -53,18 +53,18 @@ struct PongMsg {
 struct PingMsg {
     static constexpr ProtoType type = ProtoType::REQUEST;
     static constexpr const char* name = "PING";
-    static constexpr uint8_t fc = 13;
+    static constexpr uint8_t id = 13;
     uint32_t timestamp;
     using ResponseType = PongMsg;
 } __attribute__((packed));
 
 // Fonction utilitaire pour envoyer une frame personnalisée
-void sendCustomFrame(HardwareSerial* serial, uint8_t sof, uint8_t len, uint8_t fc, const std::vector<uint8_t>& payload, uint16_t crc = 0) {
+void sendCustomFrame(HardwareSerial* serial, uint8_t sof, uint8_t len, uint8_t id, const std::vector<uint8_t>& payload, uint16_t crc = 0) {
     // Construire la frame sans CRC
     std::vector<uint8_t> frame;
     frame.push_back(sof);
     frame.push_back(len);
-    frame.push_back(fc);
+    frame.push_back(id);
     frame.insert(frame.end(), payload.begin(), payload.end());
 
     // Si crc == 0, on le calcule sur la frame complète
@@ -368,7 +368,7 @@ void test_truncated_message() {
     slave.registerRequest<SetLedMsg>();
     
     // 1. Envoyer un message tronqué : on annonce une longueur de 12 (0x0C) mais on envoie moins
-    std::vector<uint8_t> truncated_data = {0x01, 0x42};  // FC + payload
+    std::vector<uint8_t> truncated_data = {0x01, 0x42};  // ID + payload
     sendCustomFrame(&Serial1, SimpleCommDfs::START_OF_FRAME, 0x0C, 0x01, truncated_data, 0);
     
     // 2. Envoyer un message valide (SetLedMsg)
@@ -432,7 +432,7 @@ void test_unexpected_response() {
     
     // Ici c'est différent : le slave envoie une réponse inattendue au master
     std::vector<uint8_t> payload = {0x42};  // Données quelconques
-    sendCustomFrame(&Serial2, SimpleCommDfs::START_OF_FRAME, 6, 0x81, payload, 0);  // FC avec bit de réponse
+    sendCustomFrame(&Serial2, SimpleCommDfs::START_OF_FRAME, 6, 0x81, payload, 0);  // ID avec bit de réponse
     
     // Le master doit détecter l'erreur
     delay(20);  // Laisser le temps à la transmission UART

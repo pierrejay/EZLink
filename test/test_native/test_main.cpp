@@ -6,19 +6,19 @@
 struct BorderlineMsg {
     static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "BORDERLINE";
-    static constexpr uint8_t fc = 10;
+    static constexpr uint8_t id = 10;
     uint8_t data[SimpleCommDfs::MAX_FRAME_SIZE - SimpleCommDfs::FRAME_OVERHEAD];
 };
 
 struct DuplicateNameMsg {
-    static constexpr uint8_t fc = 20;
+    static constexpr uint8_t id = 20;
     static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "SET_LED";  // Same name as SetLedMsg
     uint8_t value;
 };
 
-struct SameFcMsg {
-    static constexpr uint8_t fc = SetLedMsg::fc;  // Same FC
+struct SameIdMsg {
+    static constexpr uint8_t id = SetLedMsg::id;  // Same ID
     static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "DIFFERENT";
     uint8_t value;
@@ -26,7 +26,7 @@ struct SameFcMsg {
 
 // Not used (test blocked at compilation => OK)
 struct NullNameMsg {
-    static constexpr uint8_t fc = 30;
+    static constexpr uint8_t id = 30;
     static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = nullptr;
     uint8_t value;
@@ -34,14 +34,14 @@ struct NullNameMsg {
 
 // Not used (test blocked at compilation => OK)
 struct EmptyNameMsg {
-    static constexpr uint8_t fc = 31;
+    static constexpr uint8_t id = 31;
     static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "";  // Empty string
     uint8_t value;
 };
 
 struct ComplexMsg {
-    static constexpr uint8_t fc = 32;
+    static constexpr uint8_t id = 32;
     static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "COMPLEX";
     uint32_t array[4];
@@ -50,19 +50,19 @@ struct ComplexMsg {
 };
 
 struct MinimalMsg {
-    static constexpr uint8_t fc = 33;
+    static constexpr uint8_t id = 33;
     static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr const char* name = "MINIMAL";
     uint8_t dummy;  // Minimal message of one byte
 };
 
-// Structures pour les tests de FC Request/Response
+// Structures pour les tests de ID Request/Response
 struct TestResponseMsg;  // Forward declaration nécessaire car TestRequestMsg y fait référence
 
 struct TestRequestMsg {
     static constexpr ProtoType type = ProtoType::REQUEST;
     static constexpr const char* name = "TEST_REQ";
-    static constexpr uint8_t fc = 42;  // FC arbitraire entre 1-127
+    static constexpr uint8_t id = 42;  // ID arbitraire entre 1-127
     using ResponseType = TestResponseMsg;  // Utilise TestResponseMsg qui doit être déclaré avant
     uint8_t data;
 } __attribute__((packed));
@@ -70,14 +70,14 @@ struct TestRequestMsg {
 struct TestResponseMsg {
     static constexpr ProtoType type = ProtoType::RESPONSE;
     static constexpr const char* name = "TEST_RESP";
-    static constexpr uint8_t fc = 42;  // Même FC que la requête
+    static constexpr uint8_t id = 42;  // Même ID que la requête
     uint8_t data;
 } __attribute__((packed));
 
 struct WrongResponseMsg {
     static constexpr ProtoType type = ProtoType::RESPONSE;
     static constexpr const char* name = "WRONG_RESP";
-    static constexpr uint8_t fc = 43;  // Different de TestRequestMsg::fc !
+    static constexpr uint8_t id = 43;  // Different de TestRequestMsg::id !
     uint8_t data;
 } __attribute__((packed));
 
@@ -102,11 +102,11 @@ private:
 
     void prepareAutoResponse() {
         // We don't prepare auto-response for MESSAGE messages
-        if (lastMessageFC == SetLedMsg::fc) {
+        if (lastMessageFC == SetLedMsg::id) {
             return;  // SetLedMsg is MESSAGE
         }
         
-        if (lastMessageFC == SetPwmMsg::fc) {
+        if (lastMessageFC == SetPwmMsg::id) {
             // Trouver la taille du message SetPwmMsg
             size_t msgSize = sizeof(SetPwmMsg) + SimpleCommDfs::FRAME_OVERHEAD;
             
@@ -115,7 +115,7 @@ private:
             while (offset < txCount) {
                 if (txBuffer[offset] == SimpleCommDfs::START_OF_FRAME && 
                     offset + 2 < txCount && 
-                    txBuffer[offset + 2] == SetPwmMsg::fc) {
+                    txBuffer[offset + 2] == SetPwmMsg::id) {
                     break;
                 }
                 offset++;
@@ -131,8 +131,8 @@ private:
             }
             printf("\n");
             
-            // 2. Mettre le bon FC
-            autoResponseBuffer[2] = SetPwmMsg::fc | SimpleCommDfs::FC_RESPONSE_BIT;
+            // 2. Mettre le bon ID
+            autoResponseBuffer[2] = SetPwmMsg::id | SimpleCommDfs::FC_RESPONSE_BIT;
             printf("MOCK: Modified message (before CRC):");
             for(size_t i = 0; i < msgSize-1; i++) {
                 printf(" %02X", autoResponseBuffer[i]);
@@ -154,14 +154,14 @@ private:
             
             autoResponseSize = msgSize;
         }
-        else if (lastMessageFC == GetStatusMsg::fc) {
-            // Pour REQUEST/RESPONSE, on construit une réponse avec FC | SimpleCommDfs::FC_RESPONSE_BIT
+        else if (lastMessageFC == GetStatusMsg::id) {
+            // Pour REQUEST/RESPONSE, on construit une réponse avec ID | SimpleCommDfs::FC_RESPONSE_BIT
             StatusResponseMsg resp{.state = 1, .uptime = 1000};
             
             // Build the response frame
             autoResponseBuffer[0] = SimpleCommDfs::START_OF_FRAME;
             autoResponseBuffer[1] = sizeof(StatusResponseMsg) + SimpleCommDfs::FRAME_OVERHEAD;
-            autoResponseBuffer[2] = StatusResponseMsg::fc | SimpleCommDfs::FC_RESPONSE_BIT;  // FC de réponse
+            autoResponseBuffer[2] = StatusResponseMsg::id | SimpleCommDfs::FC_RESPONSE_BIT;  // ID de réponse
             memcpy(&autoResponseBuffer[3], &resp, sizeof(StatusResponseMsg));
             uint16_t crc = SimpleComm::calculateCRC16(autoResponseBuffer, sizeof(StatusResponseMsg) + SimpleCommDfs::FRAME_OVERHEAD - 2);
             autoResponseBuffer[sizeof(StatusResponseMsg) + SimpleCommDfs::FRAME_OVERHEAD - 2] = (uint8_t)(crc >> 8);    // MSB
@@ -188,7 +188,7 @@ public:
 
     size_t write(const uint8_t* buffer, size_t size) override {
         printf("MOCK: Writing frame, size=%zu\n", size);
-        printf("MOCK: FC=%d (0x%02X)\n", buffer[2], buffer[2]);
+        printf("MOCK: ID=%d (0x%02X)\n", buffer[2], buffer[2]);
         
         // Store the message
         size_t written = 0;
@@ -196,18 +196,18 @@ public:
             txBuffer[txCount++] = buffer[written++];
         }
         
-        // Extract the FC (3rd byte of the frame)
+        // Extract the ID (3rd byte of the frame)
         if (size >= 3) {
             lastMessageFC = buffer[2];
             printf("MOCK: Stored lastMessageFC=%d (0x%02X)\n", lastMessageFC, lastMessageFC);
             
             // Prepare a response only for messages that expect one AND if enabled
             if (autoResponseEnabled && 
-                (lastMessageFC == SetPwmMsg::fc || lastMessageFC == GetStatusMsg::fc)) {
+                (lastMessageFC == SetPwmMsg::id || lastMessageFC == GetStatusMsg::id)) {
                 prepareAutoResponse();
                 
                 printf("MOCK: Prepared auto-response, size=%zu\n", autoResponseSize);
-                printf("MOCK: Response FC=%d (0x%02X)\n", autoResponseBuffer[2], autoResponseBuffer[2]);
+                printf("MOCK: Response ID=%d (0x%02X)\n", autoResponseBuffer[2], autoResponseBuffer[2]);
                 
                 // Copy auto-response into the reception buffer
                 memcpy(rxBuffer, autoResponseBuffer, autoResponseSize);
@@ -348,7 +348,7 @@ void test_on_receive(void) {
     uint8_t frame[] = {
         SimpleCommDfs::START_OF_FRAME,  // SOF
         sizeof(SetLedMsg) + SimpleCommDfs::FRAME_OVERHEAD,  // LEN
-        SetLedMsg::fc,               // FC
+        SetLedMsg::id,               // ID
         1,                          // state = 1
         0,                           // CRC (will be calculated below)
         0                           // CRC (will be calculated below)
@@ -388,7 +388,7 @@ void test_timeout(void) {
     uint8_t partialResponse[] = {
         SimpleCommDfs::START_OF_FRAME,
         sizeof(SetPwmMsg) + SimpleCommDfs::FRAME_OVERHEAD,
-        SetPwmMsg::fc | SimpleCommDfs::FC_RESPONSE_BIT,
+        SetPwmMsg::id | SimpleCommDfs::FC_RESPONSE_BIT,
         // Manque les données et le CRC
     };
     serial.injectData(partialResponse, sizeof(partialResponse));
@@ -459,7 +459,7 @@ void test_error_cases(void) {
     uint8_t badCrcFrame[] = {
         SimpleCommDfs::START_OF_FRAME,
         sizeof(SetLedMsg) + SimpleCommDfs::FRAME_OVERHEAD,
-        SetLedMsg::fc,
+        SetLedMsg::id,
         1,
         0xFF, 0xFF  // Bad CRC
     };
@@ -515,8 +515,8 @@ void test_proto_mismatch(void) {
     
     comm.registerRequest<SetLedMsg>();
     
-    // Try to use a message with the same FC but a different name
-    SameFcMsg msg{.value = 1};
+    // Try to use a message with the same ID but a different name
+    SameIdMsg msg{.value = 1};
     auto result = comm.sendMsg(msg);
     TEST_ASSERT_EQUAL(SimpleComm::ERR_SND_PROTO_MISMATCH, result.status);
 }
@@ -528,8 +528,8 @@ void test_handler_wrong_name(void) {
     
     comm.registerRequest<SetLedMsg>();
     
-    // Try to register a handler for a message with the same FC but different name
-    auto result = comm.onReceive<SameFcMsg>([](const SameFcMsg&) {});
+    // Try to register a handler for a message with the same ID but different name
+    auto result = comm.onReceive<SameIdMsg>([](const SameIdMsg&) {});
     TEST_ASSERT_EQUAL(SimpleComm::ERR_REG_PROTO_MISMATCH, result.status);
 }
 
@@ -596,7 +596,7 @@ void test_malformed_frames(void) {
     uint8_t wrongLenFrame[] = {
         SimpleCommDfs::START_OF_FRAME,
         sizeof(SetLedMsg) + SimpleCommDfs::FRAME_OVERHEAD + 1,  // Too long
-        SetLedMsg::fc,
+        SetLedMsg::id,
         1,
         0,    // Données supplémentaires pour atteindre la taille annoncée
         0, 0  // CRC
@@ -622,7 +622,7 @@ void test_stress(void) {
     uint8_t frame[] = {
         SimpleCommDfs::START_OF_FRAME,
         sizeof(SetLedMsg) + SimpleCommDfs::FRAME_OVERHEAD,
-        SetLedMsg::fc,
+        SetLedMsg::id,
         1,
         0, 0  // CRC
     };
@@ -666,7 +666,7 @@ void test_stress(void) {
     uint8_t frameWithSOF[] = {
         SimpleCommDfs::START_OF_FRAME,  // SOF initial
         sizeof(SetLedMsg) + SimpleCommDfs::FRAME_OVERHEAD,
-        SetLedMsg::fc,
+        SetLedMsg::id,
         SimpleCommDfs::START_OF_FRAME,  // SOF in the data - perfectly valid !
         0, 0  // CRC
     };
@@ -716,8 +716,8 @@ void test_mixed_message_types(void) {
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
     
     printf("\nTesting MESSAGE_ACK message...\n");
-    printf("Original FC: 0x%02X\n", SetPwmMsg::fc);
-    printf("Expected response FC: 0x%02X\n", SetPwmMsg::fc | SimpleCommDfs::FC_RESPONSE_BIT);
+    printf("Original ID: 0x%02X\n", SetPwmMsg::id);
+    printf("Expected response ID: 0x%02X\n", SetPwmMsg::id | SimpleCommDfs::FC_RESPONSE_BIT);
     result = comm.sendMsgAck(pwm);         
     if (result != SimpleComm::SUCCESS) {
         printf("Failed with error: %d\n", result.status);
@@ -727,7 +727,7 @@ void test_mixed_message_types(void) {
     // ...
 }
 
-void test_response_fc_calculation() {
+void test_response_id_calculation() {
     MockSerial serial;
     serial.reset();
     SimpleComm comm(&serial);
@@ -739,12 +739,12 @@ void test_response_fc_calculation() {
     result = comm.registerResponse<TestResponseMsg>();
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
     
-    const auto* proto = comm.getProtoStore(TestRequestMsg::fc | SimpleCommDfs::FC_RESPONSE_BIT);
+    const auto* proto = comm.getProtoStore(TestRequestMsg::id | SimpleCommDfs::FC_RESPONSE_BIT);
     TEST_ASSERT_NOT_NULL(proto);
-    TEST_ASSERT_EQUAL(TestResponseMsg::fc | SimpleCommDfs::FC_RESPONSE_BIT, proto->fc);
+    TEST_ASSERT_EQUAL(TestResponseMsg::id | SimpleCommDfs::FC_RESPONSE_BIT, proto->id);
 }
 
-void test_response_wrong_fc() {
+void test_response_wrong_id() {
     MockSerial serial;
     serial.reset();
     SimpleComm comm(&serial);
@@ -753,7 +753,7 @@ void test_response_wrong_fc() {
     auto result = comm.registerRequest<TestRequestMsg>();
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
     
-    // La réponse avec mauvais FC doit être rejetée
+    // La réponse avec mauvais ID doit être rejetée
     result = comm.registerResponse<WrongResponseMsg>();
     TEST_ASSERT_NOT_EQUAL(SimpleComm::SUCCESS, result.status);
 }
@@ -797,7 +797,7 @@ void test_busy_receiving(void) {
     uint8_t partialFrame[] = {
         SimpleCommDfs::START_OF_FRAME,  // SOF
         sizeof(SetLedMsg) + SimpleCommDfs::FRAME_OVERHEAD,  // LEN
-        SetLedMsg::fc,  // FC
+        SetLedMsg::id,  // ID
         // On n'injecte pas tout le message pour simuler une réception partielle
     };
     
@@ -812,13 +812,13 @@ void test_busy_receiving(void) {
     // Premier poll() pour démarrer la capture
     printf("TEST: Starting frame capture...\n");
     auto result = comm.poll();
-    printf("TEST: Poll result: status=%d, fc=%d\n", result.status, result.fc);
+    printf("TEST: Poll result: status=%d, id=%d\n", result.status, result.id);
     
     // Essayer d'envoyer un message pendant la capture
     printf("TEST: Trying to send while capturing...\n");
     SetLedMsg msg{.state = 1};
     result = comm.sendMsg(msg);  // MESSAGE ne nettoie pas le buffer
-    printf("TEST: Send result: status=%d, fc=%d\n", result.status, result.fc);
+    printf("TEST: Send result: status=%d, id=%d\n", result.status, result.id);
     TEST_ASSERT_EQUAL(SimpleComm::ERR_BUSY_RECEIVING, result.status);
 }
 
@@ -847,7 +847,7 @@ void test_request_during_response_wait() {
     uint8_t incomingRequest[] = {
         SimpleCommDfs::START_OF_FRAME,
         sizeof(SetLedMsg) + SimpleCommDfs::FRAME_OVERHEAD,
-        SetLedMsg::fc,
+        SetLedMsg::id,
         0x01,  // state = 1
         0, 0   // CRC à calculer
     };
@@ -861,13 +861,13 @@ void test_request_during_response_wait() {
     // 3. Le poll() doit traiter la requête LED normalement
     result = comm.poll();
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
-    TEST_ASSERT_EQUAL(SetLedMsg::fc, result.fc);
+    TEST_ASSERT_EQUAL(SetLedMsg::id, result.id);
     
     // 4. Maintenant on reçoit la réponse de status (tardive)
     uint8_t lateResponse[] = {
         SimpleCommDfs::START_OF_FRAME,
         sizeof(StatusResponseMsg) + SimpleCommDfs::FRAME_OVERHEAD,
-        StatusResponseMsg::fc | SimpleCommDfs::FC_RESPONSE_BIT,
+        StatusResponseMsg::id | SimpleCommDfs::FC_RESPONSE_BIT,
         0x01,  // state = 1
         0x00, 0x00, 0x00, 0x00,  // uptime = 0
         0, 0   // CRC à calculer
@@ -916,8 +916,8 @@ int main(void) {
     RUN_TEST(test_busy_receiving);
 
     // Tests spécifiques Request/Response
-    RUN_TEST(test_response_fc_calculation);
-    RUN_TEST(test_response_wrong_fc);
+    RUN_TEST(test_response_id_calculation);
+    RUN_TEST(test_response_wrong_id);
     RUN_TEST(test_request_during_response_wait);
 
     return UNITY_END();
