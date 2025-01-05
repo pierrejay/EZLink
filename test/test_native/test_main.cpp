@@ -1,4 +1,5 @@
 #include <unity.h>
+#include <Arduino.h>
 #include "SimpleComm.h"
 #include "SimpleComm_Proto.h"
 
@@ -94,7 +95,7 @@ private:
     size_t rxIndex;
     
     // For response simulation
-    uint8_t lastMessageFC;
+    uint8_t lastMessageID;
     uint8_t autoResponseBuffer[BUFFER_SIZE];
     size_t autoResponseSize;
     int availableForWriteValue;
@@ -102,11 +103,11 @@ private:
 
     void prepareAutoResponse() {
         // We don't prepare auto-response for MESSAGE messages
-        if (lastMessageFC == SetLedMsg::id) {
+        if (lastMessageID == SetLedMsg::id) {
             return;  // SetLedMsg is MESSAGE
         }
         
-        if (lastMessageFC == SetPwmMsg::id) {
+        if (lastMessageID == SetPwmMsg::id) {
             // Trouver la taille du message SetPwmMsg
             size_t msgSize = sizeof(SetPwmMsg) + SimpleCommDfs::FRAME_OVERHEAD;
             
@@ -132,7 +133,7 @@ private:
             printf("\n");
             
             // 2. Mettre le bon ID
-            autoResponseBuffer[2] = SetPwmMsg::id | SimpleCommDfs::FC_RESPONSE_BIT;
+            autoResponseBuffer[2] = SetPwmMsg::id | SimpleCommDfs::ID_RESPONSE_BIT;
             printf("MOCK: Modified message (before CRC):");
             for(size_t i = 0; i < msgSize-1; i++) {
                 printf(" %02X", autoResponseBuffer[i]);
@@ -154,14 +155,14 @@ private:
             
             autoResponseSize = msgSize;
         }
-        else if (lastMessageFC == GetStatusMsg::id) {
-            // Pour REQUEST/RESPONSE, on construit une réponse avec ID | SimpleCommDfs::FC_RESPONSE_BIT
+        else if (lastMessageID == GetStatusMsg::id) {
+            // Pour REQUEST/RESPONSE, on construit une réponse avec ID | SimpleCommDfs::ID_RESPONSE_BIT
             StatusResponseMsg resp{.state = 1, .uptime = 1000};
             
             // Build the response frame
             autoResponseBuffer[0] = SimpleCommDfs::START_OF_FRAME;
             autoResponseBuffer[1] = sizeof(StatusResponseMsg) + SimpleCommDfs::FRAME_OVERHEAD;
-            autoResponseBuffer[2] = StatusResponseMsg::id | SimpleCommDfs::FC_RESPONSE_BIT;  // ID de réponse
+            autoResponseBuffer[2] = StatusResponseMsg::id | SimpleCommDfs::ID_RESPONSE_BIT;  // ID de réponse
             memcpy(&autoResponseBuffer[3], &resp, sizeof(StatusResponseMsg));
             uint16_t crc = SimpleComm::calculateCRC16(autoResponseBuffer, sizeof(StatusResponseMsg) + SimpleCommDfs::FRAME_OVERHEAD - 2);
             autoResponseBuffer[sizeof(StatusResponseMsg) + SimpleCommDfs::FRAME_OVERHEAD - 2] = (uint8_t)(crc >> 8);    // MSB
@@ -172,7 +173,7 @@ private:
     }
 
 public:
-    MockSerial() : txCount(0), rxCount(0), rxIndex(0), lastMessageFC(0), autoResponseSize(0), availableForWriteValue(255) {
+    MockSerial() : txCount(0), rxCount(0), rxIndex(0), lastMessageID(0), autoResponseSize(0), availableForWriteValue(255) {
         memset(txBuffer, 0, BUFFER_SIZE);
         memset(rxBuffer, 0, BUFFER_SIZE);
         memset(autoResponseBuffer, 0, BUFFER_SIZE);
@@ -198,12 +199,12 @@ public:
         
         // Extract the ID (3rd byte of the frame)
         if (size >= 3) {
-            lastMessageFC = buffer[2];
-            printf("MOCK: Stored lastMessageFC=%d (0x%02X)\n", lastMessageFC, lastMessageFC);
+            lastMessageID = buffer[2];
+            printf("MOCK: Stored lastMessageID=%d (0x%02X)\n", lastMessageID, lastMessageID);
             
             // Prepare a response only for messages that expect one AND if enabled
             if (autoResponseEnabled && 
-                (lastMessageFC == SetPwmMsg::id || lastMessageFC == GetStatusMsg::id)) {
+                (lastMessageID == SetPwmMsg::id || lastMessageID == GetStatusMsg::id)) {
                 prepareAutoResponse();
                 
                 printf("MOCK: Prepared auto-response, size=%zu\n", autoResponseSize);
@@ -246,7 +247,7 @@ public:
         rxIndex = 0;
         
         // Reset states
-        lastMessageFC = 0;
+        lastMessageID = 0;
         autoResponseSize = 0;
         availableForWriteValue = 255;
         
@@ -308,7 +309,7 @@ void test_register_proto(void) {
 
     // Test 2: Double registration
     result = comm.registerRequest<SetLedMsg>();
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_FC_ALREADY_REGISTERED, result.status);
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_ID_ALREADY_REGISTERED, result.status);
 }
 
 void test_send_msg(void) {
@@ -327,7 +328,7 @@ void test_send_msg(void) {
     // Send test without proto registered
     SetPwmMsg pwm{.pin = 1, .freq = 1000};
     result = comm.sendMsgAck(pwm);  // Use sendMsgAck for MESSAGE_ACK
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_SND_INVALID_FC, result.status);
+    TEST_ASSERT_EQUAL(SimpleComm::ERR_SND_INVALID_ID, result.status);
 }
 
 void test_on_receive(void) {
@@ -388,7 +389,7 @@ void test_timeout(void) {
     uint8_t partialResponse[] = {
         SimpleCommDfs::START_OF_FRAME,
         sizeof(SetPwmMsg) + SimpleCommDfs::FRAME_OVERHEAD,
-        SetPwmMsg::id | SimpleCommDfs::FC_RESPONSE_BIT,
+        SetPwmMsg::id | SimpleCommDfs::ID_RESPONSE_BIT,
         // Manque les données et le CRC
     };
     serial.injectData(partialResponse, sizeof(partialResponse));
@@ -717,7 +718,7 @@ void test_mixed_message_types(void) {
     
     printf("\nTesting MESSAGE_ACK message...\n");
     printf("Original ID: 0x%02X\n", SetPwmMsg::id);
-    printf("Expected response ID: 0x%02X\n", SetPwmMsg::id | SimpleCommDfs::FC_RESPONSE_BIT);
+    printf("Expected response ID: 0x%02X\n", SetPwmMsg::id | SimpleCommDfs::ID_RESPONSE_BIT);
     result = comm.sendMsgAck(pwm);         
     if (result != SimpleComm::SUCCESS) {
         printf("Failed with error: %d\n", result.status);
@@ -739,9 +740,9 @@ void test_response_id_calculation() {
     result = comm.registerResponse<TestResponseMsg>();
     TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
     
-    const auto* proto = comm.getProtoStore(TestRequestMsg::id | SimpleCommDfs::FC_RESPONSE_BIT);
+    const auto* proto = comm.getProtoStore(TestRequestMsg::id | SimpleCommDfs::ID_RESPONSE_BIT);
     TEST_ASSERT_NOT_NULL(proto);
-    TEST_ASSERT_EQUAL(TestResponseMsg::id | SimpleCommDfs::FC_RESPONSE_BIT, proto->id);
+    TEST_ASSERT_EQUAL(TestResponseMsg::id | SimpleCommDfs::ID_RESPONSE_BIT, proto->id);
 }
 
 void test_response_wrong_id() {
@@ -867,7 +868,7 @@ void test_request_during_response_wait() {
     uint8_t lateResponse[] = {
         SimpleCommDfs::START_OF_FRAME,
         sizeof(StatusResponseMsg) + SimpleCommDfs::FRAME_OVERHEAD,
-        StatusResponseMsg::id | SimpleCommDfs::FC_RESPONSE_BIT,
+        StatusResponseMsg::id | SimpleCommDfs::ID_RESPONSE_BIT,
         0x01,  // state = 1
         0x00, 0x00, 0x00, 0x00,  // uptime = 0
         0, 0   // CRC à calculer

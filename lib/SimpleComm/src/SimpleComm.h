@@ -98,10 +98,10 @@ static constexpr size_t MAX_FRAME_SIZE = 32;      // Defines max RX buffer size
 static constexpr uint8_t START_OF_FRAME = 0xAA;   // Start Of Frame marker
 static constexpr size_t FRAME_OVERHEAD = 5;       // SOF + LEN + ID + CRC*2
 // ID constants
-static constexpr uint8_t NULL_FC = 0;             // ID=0 reserved/invalid
+static constexpr uint8_t NULL_ID = 0;             // ID=0 reserved/invalid
 static constexpr uint8_t MAX_PROTOS = 10;         // Maximum number of protos registered overall
-static constexpr uint8_t FC_RESPONSE_BIT = 0x80;  // Bit 7 set for responses
-static constexpr uint8_t FC_MAX_USER = 0x7F;      // Max 127 user-defined ID (1-127)
+static constexpr uint8_t ID_RESPONSE_BIT = 0x80;  // Bit 7 set for responses
+static constexpr uint8_t ID_MAX_USER = 0x7F;      // Max 127 user-defined ID (1-127)
 // Timeouts & protections
 static constexpr uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // Wait max 500ms for a response
 static constexpr size_t RX_CLEANUP_BYTES_LIMIT = 256;          // Limite pour détecter un flood au cleanup
@@ -129,17 +129,17 @@ public:
         // Poll result
         NOTHING_TO_DO = 1,
         // RegisterProto errors
-        ERR_FC_ALREADY_REGISTERED = 10,     // ID already registered
+        ERR_ID_ALREADY_REGISTERED = 10,     // ID already registered
         ERR_NAME_ALREADY_REGISTERED = 11,   // Name already registered
         ERR_TOO_MANY_PROTOS = 12,           // Too many protos registered
         ERR_INVALID_NAME = 13,              // Name is null or empty
-        ERR_REG_INVALID_FC = 14,            // ID not registered
+        ERR_REG_INVALID_ID = 14,            // ID not registered
         ERR_REG_PROTO_MISMATCH = 15,        // Inconsistency between expected and registered proto
         // Poll & sendMsg errors
         ERR_BUSY_RECEIVING = 20,            // Frame capture pending, we must wait for the end of the frame to send a new message
         // RX errors
         ERR_RCV_MIN = 30,                   // Dummy error code
-        ERR_RCV_INVALID_FC = 31,            // ID not registered
+        ERR_RCV_INVALID_ID = 31,            // ID not registered
         ERR_RCV_INVALID_SOF = 32,           // Invalid SOF
         ERR_RCV_INVALID_LEN = 33,           // Invalid length
         ERR_RCV_PROTO_MISMATCH = 34,        // Message received but inconsistent with expected proto
@@ -151,7 +151,7 @@ public:
         ERR_RCV_MAX = 40,                   // Dummy error code
         // TX errors
         ERR_SND_MIN = 40,                   // Dummy error code
-        ERR_SND_INVALID_FC = 41,            // ID not registered
+        ERR_SND_INVALID_ID = 41,            // ID not registered
         ERR_SND_EMPTY_DATA = 42,            // Empty data to send
         ERR_SND_PROTO_MISMATCH = 43,        // Inconsistency between expected and sent proto
         ERR_SND_MAX = 44,                   // Dummy error code
@@ -170,9 +170,9 @@ public:
         bool operator!=(Status s) const { return status != s; }
     };
     // Helpers to create results
-    static constexpr Result Error(Status status, uint8_t id = SimpleCommDfs::NULL_FC) { return Result{status, id}; }
-    static constexpr Result Success(uint8_t id = SimpleCommDfs::NULL_FC) { return Result{SUCCESS, id}; }
-    static constexpr Result NoData() { return Result{NOTHING_TO_DO, SimpleCommDfs::NULL_FC}; }
+    static constexpr Result Error(Status status, uint8_t id = SimpleCommDfs::NULL_ID) { return Result{status, id}; }
+    static constexpr Result Success(uint8_t id = SimpleCommDfs::NULL_ID) { return Result{SUCCESS, id}; }
+    static constexpr Result NoData() { return Result{NOTHING_TO_DO, SimpleCommDfs::NULL_ID}; }
 
     /* @brief Constructor with callbacks (always available) */
     explicit SimpleComm(TxCallback tx, 
@@ -289,8 +289,8 @@ public:
                      T::type == ProtoType::MESSAGE || 
                      T::type == ProtoType::MESSAGE_ACK,
                      "You tried to register a RESPONSE with registerRequest() - use registerResponse() for RESPONSE types");
-        static_assert(T::id != SimpleCommDfs::NULL_FC, "ID=0 is reserved/invalid");
-        static_assert((T::id & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "Request ID must be <= 127");
+        static_assert(T::id != SimpleCommDfs::NULL_ID, "ID=0 is reserved/invalid");
+        static_assert((T::id & SimpleCommDfs::ID_RESPONSE_BIT) == 0, "Request ID must be <= 127");
         static_assert(T::name != nullptr, "Message must have a name");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert(sizeof(T) + SimpleCommDfs::FRAME_OVERHEAD <= SimpleCommDfs::MAX_FRAME_SIZE, "Message too large");
@@ -303,8 +303,8 @@ public:
     Result registerResponse() {
         static_assert(T::type == ProtoType::RESPONSE, 
                      "Wrong message type - registerResponse() only works with RESPONSE types");
-        static_assert(T::id != SimpleCommDfs::NULL_FC, "ID=0 is reserved/invalid");
-        static_assert((T::id & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "Response ID must be <= 127");
+        static_assert(T::id != SimpleCommDfs::NULL_ID, "ID=0 is reserved/invalid");
+        static_assert((T::id & SimpleCommDfs::ID_RESPONSE_BIT) == 0, "Response ID must be <= 127");
         static_assert(T::name != nullptr, "Message must have a name");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert(sizeof(T) + SimpleCommDfs::FRAME_OVERHEAD <= SimpleCommDfs::MAX_FRAME_SIZE, "Message too large");
@@ -312,11 +312,11 @@ public:
         // Check if a request with this ID is registered
         ProtoStore* requestProto = findProto(T::id);  // Search with original ID
         if (requestProto == nullptr) {
-            return Error(ERR_REG_INVALID_FC, T::id);  // No corresponding request
+            return Error(ERR_REG_INVALID_ID, T::id);  // No corresponding request
         }
 
         // Replace the ID by its complement (ID | 0x80)
-        return registerProtoInternal<T>(T::id | SimpleCommDfs::FC_RESPONSE_BIT);
+        return registerProtoInternal<T>(T::id | SimpleCommDfs::ID_RESPONSE_BIT);
     }
 
     /* @brief Handler for MESSAGE and MESSAGE_ACK messages
@@ -366,8 +366,8 @@ public:
     Result sendMsg(const T& msg) {
         static_assert(T::type == ProtoType::MESSAGE, "Wrong message type, sendMsg() only works with MESSAGE messages");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert((T::id & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "ID must be <= 127");
-        static_assert(T::id != SimpleCommDfs::NULL_FC, "ID must not be NULL (0)");  // Check at compilation
+        static_assert((T::id & SimpleCommDfs::ID_RESPONSE_BIT) == 0, "ID must be <= 127");
+        static_assert(T::id != SimpleCommDfs::NULL_ID, "ID must not be NULL (0)");  // Check at compilation
         return sendMsgInternal(msg, false);
     }
 
@@ -378,8 +378,8 @@ public:
     Result sendMsgAck(const T& msg) {
         static_assert(T::type == ProtoType::MESSAGE_ACK, "Wrong message type, sendMsgAck() only works with MESSAGE_ACK messages");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert((T::id & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "ID must be <= 127");
-        static_assert(T::id != SimpleCommDfs::NULL_FC, "ID must not be NULL (0)");  // Check at compilation
+        static_assert((T::id & SimpleCommDfs::ID_RESPONSE_BIT) == 0, "ID must be <= 127");
+        static_assert(T::id != SimpleCommDfs::NULL_ID, "ID must not be NULL (0)");  // Check at compilation
         
         // Clean the RX buffer before sending
         auto result = cleanupRxBuffer();
@@ -400,7 +400,7 @@ public:
         unsigned long startTime = millis();
         while(millis() - startTime < responseTimeoutMs) {
             // We expect a response with a complement of the message ID (ID | 0x80)
-            result = captureFrame(T::id | SimpleCommDfs::FC_RESPONSE_BIT, frame, &frameLen);
+            result = captureFrame(T::id | SimpleCommDfs::ID_RESPONSE_BIT, frame, &frameLen);
             if(result == NOTHING_TO_DO) {
                 continue;
             }
@@ -436,8 +436,8 @@ public:
         static_assert(std::is_same<RESP, typename REQ::ResponseType>::value, "Response type doesn't match request's ResponseType");
         static_assert(std::is_standard_layout<REQ>::value, "Request type must be POD/standard-layout");
         static_assert(std::is_standard_layout<RESP>::value, "Response type must be POD/standard-layout");
-        static_assert(REQ::id != SimpleCommDfs::NULL_FC, "ID must not be NULL (0)");
-        static_assert((REQ::id & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "Request ID must be <= 127");
+        static_assert(REQ::id != SimpleCommDfs::NULL_ID, "ID must not be NULL (0)");
+        static_assert((REQ::id & SimpleCommDfs::ID_RESPONSE_BIT) == 0, "Request ID must be <= 127");
         static_assert(REQ::id == RESP::id, "Response ID must match Request ID"); 
         
         // Clean the RX buffer before sending
@@ -459,7 +459,7 @@ public:
         unsigned long startTime = millis();
         while(millis() - startTime < responseTimeoutMs) {
             // We expect a response with a complement of the request ID (ID | 0x80)
-            result = captureFrame(RESP::id | SimpleCommDfs::FC_RESPONSE_BIT, frame, &frameLen);  // Wait for the ID with response bit
+            result = captureFrame(RESP::id | SimpleCommDfs::ID_RESPONSE_BIT, frame, &frameLen);  // Wait for the ID with response bit
             if(result == NOTHING_TO_DO) {
                 continue;
             }
@@ -499,7 +499,7 @@ public:
         if(result == SUCCESS) {
             
             // Reject responses (bit 7 set)
-            if((result.id & SimpleCommDfs::FC_RESPONSE_BIT) != 0) {
+            if((result.id & SimpleCommDfs::ID_RESPONSE_BIT) != 0) {
                 return Error(ERR_RCV_UNEXPECTED_RESPONSE, result.id);
             }
 
@@ -518,7 +518,7 @@ public:
 
                 // If it's a MESSAGE_ACK message, send the ACK automatically,
                 // flipping the ID
-                uint8_t ackId = result.id | SimpleCommDfs::FC_RESPONSE_BIT;
+                uint8_t ackId = result.id | SimpleCommDfs::ID_RESPONSE_BIT;
                 if(proto->type == ProtoType::MESSAGE_ACK) {
                     sendFrame(ackId, &rxBuffer[3], proto->size);
                 }
@@ -584,7 +584,7 @@ private:
     struct ProtoStore {
         ProtoType type = ProtoType::MESSAGE;
         const char* name = nullptr;
-        uint8_t id = SimpleCommDfs::NULL_FC;
+        uint8_t id = SimpleCommDfs::NULL_ID;
         size_t size = 0;
         std::function<void(const void*)> callback = nullptr;
     };
@@ -687,9 +687,9 @@ private:
         
         // Check if already registered (by ID or by name)
         for(size_t i = 0; i < SimpleCommDfs::MAX_PROTOS; i++) {
-            if(protos[i].id != SimpleCommDfs::NULL_FC) {
+            if(protos[i].id != SimpleCommDfs::NULL_ID) {
                 if(protos[i].id == id) {  // On compare avec le ID modifié !
-                    return Error(ERR_FC_ALREADY_REGISTERED, T::id);
+                    return Error(ERR_ID_ALREADY_REGISTERED, T::id);
                 }
                 if(strEqual(protos[i].name, T::name)) {
                     return Error(ERR_NAME_ALREADY_REGISTERED, T::id);
@@ -720,7 +720,7 @@ private:
     Result checkProto(uint8_t id, ProtoStore** outProto = nullptr) {
         ProtoStore* proto = findProto(id);
         if (proto == nullptr) {
-            return Error(ERR_SND_INVALID_FC, id);
+            return Error(ERR_SND_INVALID_ID, id);
         }
         if (!strEqual(proto->name, T::name)) {
             return Error(ERR_SND_PROTO_MISMATCH, id);
@@ -740,7 +740,7 @@ private:
 
         // Define ID, flip if needed (for responses)
         uint8_t id = msg.id;
-        if (flipId) id |= SimpleCommDfs::FC_RESPONSE_BIT;
+        if (flipId) id |= SimpleCommDfs::ID_RESPONSE_BIT;
 
         // Check if proto is registered and matches
         Result protoCheck = checkProto<T>(id);
@@ -904,7 +904,7 @@ private:
             #endif
             rxBuffer.dump(frameSize);
             rxBuffer.scrollTo(sof);
-            return Error(ERR_RCV_INVALID_FC, id);
+            return Error(ERR_RCV_INVALID_ID, id);
         }
 
         #ifdef SIMPLECOMM_DEBUG
@@ -934,7 +934,7 @@ private:
         
         ProtoStore* proto = findProto(T::id);
         if(proto == nullptr) {
-            return Error(ERR_REG_INVALID_FC, T::id);
+            return Error(ERR_REG_INVALID_ID, T::id);
         }
         if (!strEqual(proto->name, T::name)) {
             return Error(ERR_REG_PROTO_MISMATCH, T::id);
@@ -977,7 +977,7 @@ private:
      * @return The pointer to the free slot found or nullptr if no free slot is found */
     ProtoStore* findFreeSlot() {
         for(size_t i = 0; i < SimpleCommDfs::MAX_PROTOS; i++) {
-            if(protos[i].id == SimpleCommDfs::NULL_FC) {
+            if(protos[i].id == SimpleCommDfs::NULL_ID) {
                 return &protos[i];
             }
         }
