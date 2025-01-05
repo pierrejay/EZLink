@@ -22,7 +22,7 @@ struct MaxPayloadMsg {
     static constexpr ProtoType type = ProtoType::FIRE_AND_FORGET;
     static constexpr const char* name = "MAX_PAYLOAD";
     static constexpr uint8_t fc = 10;
-    uint8_t data[MAX_FRAME_SIZE - FRAME_OVERHEAD];  // Taille maximale possible
+    uint8_t data[SimpleCommDfs::MAX_FRAME_SIZE - SimpleCommDfs::FRAME_OVERHEAD];  // Taille maximale possible
 } __attribute__((packed));
 
 // Message avec payload vide
@@ -352,7 +352,7 @@ void test_corrupted_crc() {
     // Le master envoie un message avec CRC invalide au slave
     std::vector<uint8_t> data = {0x01};  // Exemple de données
     uint16_t invalidCRC = 0xFFFF;  // CRC invalide
-    sendCustomFrame(&Serial1, START_OF_FRAME, data.size() + FRAME_OVERHEAD, data.size(), data, invalidCRC);
+    sendCustomFrame(&Serial1, SimpleCommDfs::START_OF_FRAME, data.size() + SimpleCommDfs::FRAME_OVERHEAD, data.size(), data, invalidCRC);
     
     // Le slave doit détecter l'erreur
     delay(20);  // Laisser le temps à la transmission UART
@@ -369,7 +369,7 @@ void test_truncated_message() {
     
     // 1. Envoyer un message tronqué : on annonce une longueur de 12 (0x0C) mais on envoie moins
     std::vector<uint8_t> truncated_data = {0x01, 0x42};  // FC + payload
-    sendCustomFrame(&Serial1, START_OF_FRAME, 0x0C, 0x01, truncated_data, 0);
+    sendCustomFrame(&Serial1, SimpleCommDfs::START_OF_FRAME, 0x0C, 0x01, truncated_data, 0);
     
     // 2. Envoyer un message valide (SetLedMsg)
     SetLedMsg msg{.state = 1};
@@ -404,7 +404,7 @@ void test_invalid_sof() {
     // Envoyer un message avec un SOF incorrect
     std::vector<uint8_t> data = {0x01, 0x02, 0x03};  // Exemple de données
     uint16_t crc = SimpleComm::calculateCRC16(data.data(), data.size());
-    sendCustomFrame(&Serial1, 0x55, data.size() + FRAME_OVERHEAD, data.size(), data, crc);  // SOF incorrect
+    sendCustomFrame(&Serial1, 0x55, data.size() + SimpleCommDfs::FRAME_OVERHEAD, data.size(), data, crc);  // SOF incorrect
     
     // Poller pour vérifier l'erreur
     delay(20);  // Laisser le temps à la transmission UART
@@ -419,7 +419,7 @@ void test_invalid_length() {
     // Envoyer un message avec une longueur incorrecte
     std::vector<uint8_t> data = {0x01, 0x02, 0x03};  // Exemple de données
     uint16_t crc = SimpleComm::calculateCRC16(data.data(), data.size());
-    sendCustomFrame(&Serial1, START_OF_FRAME, 255, data.size(), data, crc);  // Longueur incorrecte
+    sendCustomFrame(&Serial1, SimpleCommDfs::START_OF_FRAME, 255, data.size(), data, crc);  // Longueur incorrecte
     
     // Poller pour vérifier l'erreur
     delay(20);  // Laisser le temps à la transmission UART
@@ -432,7 +432,7 @@ void test_unexpected_response() {
     
     // Ici c'est différent : le slave envoie une réponse inattendue au master
     std::vector<uint8_t> payload = {0x42};  // Données quelconques
-    sendCustomFrame(&Serial2, START_OF_FRAME, 6, 0x81, payload, 0);  // FC avec bit de réponse
+    sendCustomFrame(&Serial2, SimpleCommDfs::START_OF_FRAME, 6, 0x81, payload, 0);  // FC avec bit de réponse
     
     // Le master doit détecter l'erreur
     delay(20);  // Laisser le temps à la transmission UART
@@ -449,7 +449,7 @@ void test_oversized_message() {
     
     // 1. Envoyer un message plus long que sa LEN indiquée
     std::vector<uint8_t> oversized_data = {0x01, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48};  // 8 bytes de données
-    sendCustomFrame(&Serial1, START_OF_FRAME, 0x05, 0x01, oversized_data, 0);  // LEN = 5 mais données plus longues
+    sendCustomFrame(&Serial1, SimpleCommDfs::START_OF_FRAME, 0x05, 0x01, oversized_data, 0);  // LEN = 5 mais données plus longues
     
     // 2. Envoyer un message valide (SetLedMsg)
     SetLedMsg msg{.state = 1};

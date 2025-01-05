@@ -90,42 +90,29 @@
  * but does not guarantee thread-safety for message sending operations.
  */
 
-#ifndef UNIT_TESTING
-// For running on hardware, we define constants globally, 
-// behind a namespace to avoid pollution as 
-// inline constants are not supported by C++11
-namespace SimpleCommDef {
-    // Frame format
-    static constexpr size_t MAX_FRAME_SIZE = 32;      // Defines max RX buffer size
-    static constexpr uint8_t START_OF_FRAME = 0xAA;   // Start Of Frame marker
-    static constexpr size_t FRAME_OVERHEAD = 5;       // SOF + LEN + FC + CRC*2
-    // FC constants
-    static constexpr uint8_t NULL_FC = 0;             // FC=0 reserved/invalid
-    static constexpr uint8_t MAX_PROTOS = 10;         // Maximum number of protos registered overall
-    static constexpr uint8_t FC_RESPONSE_BIT = 0x80;  // Bit 7 set for responses
-    static constexpr uint8_t FC_MAX_USER = 0x7F;      // Max 127 user-defined FC (1-127)
-    // Default timeouts
-    static constexpr uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // Wait max 500ms for a response
-}
-using namespace SimpleCommDef; // We use the namespace right away to keep the syntax clean
-#endif
+// Constants that must stay out of the class as they
+// cannot be inlined in C++11
+
+namespace SimpleCommDfs {
+
+// Frame format
+static constexpr size_t MAX_FRAME_SIZE = 32;      // Defines max RX buffer size
+static constexpr uint8_t START_OF_FRAME = 0xAA;   // Start Of Frame marker
+static constexpr size_t FRAME_OVERHEAD = 5;       // SOF + LEN + FC + CRC*2
+// FC constants
+static constexpr uint8_t NULL_FC = 0;             // FC=0 reserved/invalid
+static constexpr uint8_t MAX_PROTOS = 10;         // Maximum number of protos registered overall
+static constexpr uint8_t FC_RESPONSE_BIT = 0x80;  // Bit 7 set for responses
+static constexpr uint8_t FC_MAX_USER = 0x7F;      // Max 127 user-defined FC (1-127)
+// Default timeouts
+static constexpr uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // Wait max 500ms for a response
+
+} // namespace SimpleCommDfs
 
 class SimpleComm {
     
 public:
-    // For tests, we can use the modern 'static constexpr inline' syntax
-    // to access constants values from test code
-    #ifdef UNIT_TESTING
-        static constexpr inline size_t MAX_FRAME_SIZE = 32;
-        static constexpr inline uint8_t START_OF_FRAME = 0xAA;
-        static constexpr inline size_t FRAME_OVERHEAD = 5;
-        static constexpr inline uint8_t NULL_FC = 0;
-        static constexpr inline uint8_t MAX_PROTOS = 10;
-        static constexpr inline uint8_t FC_RESPONSE_BIT = 0x80;
-        static constexpr inline uint8_t FC_MAX_USER = 0x7F;
-        static constexpr inline uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;
-    #endif
-    
+
     // Proto types
     enum class ProtoType {
         FIRE_AND_FORGET,  // No response expected
@@ -140,33 +127,33 @@ public:
         // Poll result
         NOTHING_TO_DO = 1,
         // RegisterProto errors
-        ERR_FC_ALREADY_REGISTERED = 10,  // FC already registered
-        ERR_NAME_ALREADY_REGISTERED = 11, // Name already registered
-        ERR_TOO_MANY_PROTOS = 12,       // Too many protos registered
-        ERR_INVALID_NAME = 13,          // Name is null or empty
-        ERR_REG_INVALID_FC = 14,      // FC not registered
-        ERR_REG_PROTO_MISMATCH = 15, // Inconsistency between expected and registered proto
+        ERR_FC_ALREADY_REGISTERED = 10,     // FC already registered
+        ERR_NAME_ALREADY_REGISTERED = 11,   // Name already registered
+        ERR_TOO_MANY_PROTOS = 12,           // Too many protos registered
+        ERR_INVALID_NAME = 13,              // Name is null or empty
+        ERR_REG_INVALID_FC = 14,            // FC not registered
+        ERR_REG_PROTO_MISMATCH = 15,        // Inconsistency between expected and registered proto
         // Poll & sendMsg errors
-        ERR_BUSY_RECEIVING = 20,      // Frame capture pending, we must wait for the end of the frame to send a new message
+        ERR_BUSY_RECEIVING = 20,            // Frame capture pending, we must wait for the end of the frame to send a new message
         // RX errors
-        ERR_RCV_MIN = 30, // Dummy error code
-        ERR_RCV_INVALID_FC = 31,      // FC not registered
-        ERR_RCV_INVALID_SOF = 32,         // Invalid SOF
-        ERR_RCV_INVALID_LEN = 33,         // Invalid length
-        ERR_RCV_PROTO_MISMATCH = 34,   // Message received but inconsistent with expected proto
-        ERR_RCV_ACK_MISMATCH = 35, // ACK received but inconsistent with sent message
-        ERR_RCV_RESP_MISMATCH = 36, // Response received but inconsistent with expected response
-        ERR_RCV_CRC = 37,           // Invalid CRC
-        ERR_RCV_UNEXPECTED_RESPONSE = 38, // Received a response but not expected
-        ERR_RCV_TIMEOUT = 39,        // No response
-        ERR_RCV_MAX = 40, // Dummy error code
+        ERR_RCV_MIN = 30,                   // Dummy error code
+        ERR_RCV_INVALID_FC = 31,            // FC not registered
+        ERR_RCV_INVALID_SOF = 32,           // Invalid SOF
+        ERR_RCV_INVALID_LEN = 33,           // Invalid length
+        ERR_RCV_PROTO_MISMATCH = 34,        // Message received but inconsistent with expected proto
+        ERR_RCV_ACK_MISMATCH = 35,          // ACK received but inconsistent with sent message
+        ERR_RCV_RESP_MISMATCH = 36,         // Response received but inconsistent with expected response
+        ERR_RCV_CRC = 37,                   // Invalid CRC
+        ERR_RCV_UNEXPECTED_RESPONSE = 38,   // Received a response but not expected
+        ERR_RCV_TIMEOUT = 39,               // No response
+        ERR_RCV_MAX = 40,                   // Dummy error code
         // TX errors
-        ERR_SND_MIN = 40,       // Dummy error code
-        ERR_SND_INVALID_FC = 41,      // FC not registered
-        ERR_SND_EMPTY_DATA = 42, // Empty data to send
-        ERR_SND_OVERFLOW = 43,   // Buffer too small
-        ERR_SND_PROTO_MISMATCH = 44, // Inconsistency between expected and sent proto
-        ERR_SND_MAX = 45        // Dummy error code
+        ERR_SND_MIN = 40,                   // Dummy error code
+        ERR_SND_INVALID_FC = 41,            // FC not registered
+        ERR_SND_EMPTY_DATA = 42,            // Empty data to send
+        ERR_SND_OVERFLOW = 43,              // Buffer too small
+        ERR_SND_PROTO_MISMATCH = 44,        // Inconsistency between expected and sent proto
+        ERR_SND_MAX = 45                    // Dummy error code
     };
 
     // Complete result of a reception operation
@@ -179,13 +166,13 @@ public:
         bool operator!=(Status s) const { return status != s; }
     };
     // Helpers to create results
-    static constexpr Result Error(Status status, uint8_t fc = NULL_FC) { return Result{status, fc}; }
+    static constexpr Result Error(Status status, uint8_t fc = SimpleCommDfs::NULL_FC) { return Result{status, fc}; }
     static constexpr Result Success(uint8_t fc) { return Result{SUCCESS, fc}; }
-    static constexpr Result NoData() { return Result{NOTHING_TO_DO, NULL_FC}; }
+    static constexpr Result NoData() { return Result{NOTHING_TO_DO, SimpleCommDfs::NULL_FC}; }
 
     // Constructor
     explicit SimpleComm(HardwareSerial* serial 
-                       , uint32_t responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS
+                       , uint32_t responseTimeoutMs = SimpleCommDfs::DEFAULT_RESPONSE_TIMEOUT_MS
                        #ifdef SIMPLECOMM_DEBUG
                        , Stream* debugStream = nullptr
                        , const char* instanceName = ""  // Nom de l'instance pour les logs
@@ -240,11 +227,11 @@ public:
                      T::type == ProtoType::FIRE_AND_FORGET || 
                      T::type == ProtoType::ACK_REQUIRED,
                      "You tried to register a RESPONSE with registerRequest() - use registerResponse() for RESPONSE types");
-        static_assert(T::fc != NULL_FC, "FC=0 is reserved/invalid");
-        static_assert((T::fc & FC_RESPONSE_BIT) == 0, "Request FC must be <= 127");
+        static_assert(T::fc != SimpleCommDfs::NULL_FC, "FC=0 is reserved/invalid");
+        static_assert((T::fc & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "Request FC must be <= 127");
         static_assert(T::name != nullptr, "Message must have a name");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert(sizeof(T) + FRAME_OVERHEAD <= MAX_FRAME_SIZE, "Message too large");
+        static_assert(sizeof(T) + SimpleCommDfs::FRAME_OVERHEAD <= SimpleCommDfs::MAX_FRAME_SIZE, "Message too large");
         return registerProtoInternal<T>(T::fc);
     }
 
@@ -253,11 +240,11 @@ public:
     Result registerResponse() {
         static_assert(T::type == ProtoType::RESPONSE, 
                      "Wrong message type - registerResponse() only works with RESPONSE types");
-        static_assert(T::fc != NULL_FC, "FC=0 is reserved/invalid");
-        static_assert((T::fc & FC_RESPONSE_BIT) == 0, "Response FC must be <= 127");
+        static_assert(T::fc != SimpleCommDfs::NULL_FC, "FC=0 is reserved/invalid");
+        static_assert((T::fc & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "Response FC must be <= 127");
         static_assert(T::name != nullptr, "Message must have a name");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert(sizeof(T) + FRAME_OVERHEAD <= MAX_FRAME_SIZE, "Message too large");
+        static_assert(sizeof(T) + SimpleCommDfs::FRAME_OVERHEAD <= SimpleCommDfs::MAX_FRAME_SIZE, "Message too large");
 
         // Vérifier qu'une requête avec ce FC est enregistrée
         ProtoStore* requestProto = findProto(T::fc);  // Chercher avec le FC original
@@ -266,7 +253,7 @@ public:
         }
 
         // On remplace le FC par son complément (FC | 0x80)
-        return registerProtoInternal<T>(T::fc | FC_RESPONSE_BIT);
+        return registerProtoInternal<T>(T::fc | SimpleCommDfs::FC_RESPONSE_BIT);
     }
 
     // Handler for FIRE_AND_FORGET and ACK_REQUIRED messages
@@ -310,8 +297,8 @@ public:
     Result sendMsg(const T& msg) {
         static_assert(T::type == ProtoType::FIRE_AND_FORGET, "Wrong message type, sendMsg() only works with FIRE_AND_FORGET messages");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert((T::fc & FC_RESPONSE_BIT) == 0, "FC must be <= 127");
-        static_assert(T::fc != NULL_FC, "FC must not be NULL (0)");  // Check at compilation
+        static_assert((T::fc & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "FC must be <= 127");
+        static_assert(T::fc != SimpleCommDfs::NULL_FC, "FC must not be NULL (0)");  // Check at compilation
         return sendMsgInternal(msg, false);
     }
 
@@ -320,8 +307,8 @@ public:
     Result sendMsgAck(const T& msg) {
         static_assert(T::type == ProtoType::ACK_REQUIRED, "Wrong message type, sendMsgAck() only works with ACK_REQUIRED messages");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert((T::fc & FC_RESPONSE_BIT) == 0, "FC must be <= 127");
-        static_assert(T::fc != NULL_FC, "FC must not be NULL (0)");  // Check at compilation
+        static_assert((T::fc & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "FC must be <= 127");
+        static_assert(T::fc != SimpleCommDfs::NULL_FC, "FC must not be NULL (0)");  // Check at compilation
         
         // Clean the RX buffer before sending
         cleanupRxBuffer();
@@ -333,13 +320,13 @@ public:
         }
         
         // Wait for echo with timeout
-        uint8_t frame[MAX_FRAME_SIZE];
+        uint8_t frame[SimpleCommDfs::MAX_FRAME_SIZE];
         size_t frameLen;
         
         unsigned long startTime = millis();
         while(millis() - startTime < responseTimeoutMs) {
             // We expect a response with a complement of the message FC (FC | 0x80)
-            result = captureFrame(T::fc | FC_RESPONSE_BIT, frame, &frameLen);
+            result = captureFrame(T::fc | SimpleCommDfs::FC_RESPONSE_BIT, frame, &frameLen);
             if(result == NOTHING_TO_DO) {
                 continue;
             }
@@ -348,7 +335,7 @@ public:
             }
             
             // Vérifier que la réponse fait la même taille que la requête
-            if(frameLen - FRAME_OVERHEAD != sizeof(T)) {
+            if(frameLen - SimpleCommDfs::FRAME_OVERHEAD != sizeof(T)) {
                 return Error(ERR_RCV_ACK_MISMATCH);
             }
             
@@ -372,8 +359,8 @@ public:
         static_assert(std::is_same<RESP, typename REQ::ResponseType>::value, "Response type doesn't match request's ResponseType");
         static_assert(std::is_standard_layout<REQ>::value, "Request type must be POD/standard-layout");
         static_assert(std::is_standard_layout<RESP>::value, "Response type must be POD/standard-layout");
-        static_assert(REQ::fc != NULL_FC, "FC must not be NULL (0)");
-        static_assert((REQ::fc & FC_RESPONSE_BIT) == 0, "Request FC must be <= 127");
+        static_assert(REQ::fc != SimpleCommDfs::NULL_FC, "FC must not be NULL (0)");
+        static_assert((REQ::fc & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "Request FC must be <= 127");
         static_assert(REQ::fc == RESP::fc, "Response FC must match Request FC"); 
         
         // Clean the RX buffer before sending
@@ -386,13 +373,13 @@ public:
         }
         
         // Wait for response with timeout
-        uint8_t frame[MAX_FRAME_SIZE];
+        uint8_t frame[SimpleCommDfs::MAX_FRAME_SIZE];
         size_t frameLen;
         
         unsigned long startTime = millis();
         while(millis() - startTime < responseTimeoutMs) {
             // We expect a response with a complement of the request FC (FC | 0x80)
-            result = captureFrame(RESP::fc | FC_RESPONSE_BIT, frame, &frameLen);  // Attendre le FC avec bit de réponse
+            result = captureFrame(RESP::fc | SimpleCommDfs::FC_RESPONSE_BIT, frame, &frameLen);  // Attendre le FC avec bit de réponse
             if(result == NOTHING_TO_DO) {
                 continue;
             }
@@ -401,7 +388,7 @@ public:
             }
             
             // Vérifier que la réponse fait la bonne taille
-            if(frameLen - FRAME_OVERHEAD != sizeof(RESP)) {
+            if(frameLen - SimpleCommDfs::FRAME_OVERHEAD != sizeof(RESP)) {
                 return Error(ERR_RCV_RESP_MISMATCH);
             }
             
@@ -416,7 +403,7 @@ public:
 
     // Process received messages with optional frame capture
     Result poll() {
-        uint8_t rxBuffer[MAX_FRAME_SIZE];  // Buffer local
+        uint8_t rxBuffer[SimpleCommDfs::MAX_FRAME_SIZE];  // Buffer local
         size_t frameLen;
 
         // Tente de capturer une frame dans le buffer local
@@ -431,7 +418,7 @@ public:
         if(result == SUCCESS) {
             
             // Rejeter les réponses (bit 7 setté)
-            if((result.fc & FC_RESPONSE_BIT) != 0) {
+            if((result.fc & SimpleCommDfs::FC_RESPONSE_BIT) != 0) {
                 return Error(ERR_RCV_UNEXPECTED_RESPONSE, result.fc);
             }
 
@@ -439,7 +426,7 @@ public:
             ProtoStore* proto = findProto(result.fc);
             if(proto) {
                 // Vérifier que la taille correspond au proto
-                if(frameLen - FRAME_OVERHEAD != proto->size) {
+                if(frameLen - SimpleCommDfs::FRAME_OVERHEAD != proto->size) {
                     return Error(ERR_RCV_PROTO_MISMATCH, result.fc);
                 }
                 
@@ -450,7 +437,7 @@ public:
 
                 // Si c'est un message ACK_REQUIRED, envoyer l'ACK automatiquement,
                 // en flippant le FC
-                uint8_t ackFc = result.fc | FC_RESPONSE_BIT;
+                uint8_t ackFc = result.fc | SimpleCommDfs::FC_RESPONSE_BIT;
                 if(proto->type == ProtoType::ACK_REQUIRED) {
                     sendFrame(ackFc, &rxBuffer[3], proto->size);
                 }
@@ -510,7 +497,7 @@ private:
     struct ProtoStore {
         ProtoType type = ProtoType::FIRE_AND_FORGET;
         const char* name = nullptr;
-        uint8_t fc = NULL_FC;
+        uint8_t fc = SimpleCommDfs::NULL_FC;
         size_t size = 0;
         std::function<void(const void*)> callback = nullptr;
     };
@@ -518,7 +505,7 @@ private:
     // Attributes
     HardwareSerial* serial;         // Port de communication
     uint32_t responseTimeoutMs;
-    ProtoStore protos[MAX_PROTOS];
+    ProtoStore protos[SimpleCommDfs::MAX_PROTOS];
     bool frameCapturePending = false;
 
     #ifdef SIMPLECOMM_DEBUG
@@ -568,7 +555,7 @@ private:
         debugStream->print(" bytes]");
         
         // Afficher l'analyse rapide si c'est une frame
-        if (len >= FRAME_OVERHEAD) {
+        if (len >= SimpleCommDfs::FRAME_OVERHEAD) {
             debugStream->print(" SOF=0x");
             if (data[0] < 0x10) debugStream->print("0");
             debugStream->print(data[0], HEX);
@@ -602,8 +589,8 @@ private:
         }
         
         // Check if already registered (by FC or by name)
-        for(size_t i = 0; i < MAX_PROTOS; i++) {
-            if(protos[i].fc != NULL_FC) {
+        for(size_t i = 0; i < SimpleCommDfs::MAX_PROTOS; i++) {
+            if(protos[i].fc != SimpleCommDfs::NULL_FC) {
                 if(protos[i].fc == fc) {  // On compare avec le FC modifié !
                     return Error(ERR_FC_ALREADY_REGISTERED, T::fc);
                 }
@@ -651,7 +638,7 @@ private:
 
         // Define FC, flip if needed (for responses)
         uint8_t fc = msg.fc;
-        if (flipFc) fc |= FC_RESPONSE_BIT;
+        if (flipFc) fc |= SimpleCommDfs::FC_RESPONSE_BIT;
 
         // Check if proto is registered and matches
         Result protoCheck = checkProto<T>(fc);
@@ -678,14 +665,14 @@ private:
         }
         
         // Check if we have enough space
-        size_t frameSize = dataLen + FRAME_OVERHEAD; // Only includes non-static fields (data) + overhead
+        size_t frameSize = dataLen + SimpleCommDfs::FRAME_OVERHEAD; // Only includes non-static fields (data) + overhead
         if(frameSize > serial->availableForWrite()) {
             return Error(ERR_SND_OVERFLOW);
         }
 
         // Prepare frame
-        uint8_t frame[MAX_FRAME_SIZE];
-        frame[0] = START_OF_FRAME;
+        uint8_t frame[SimpleCommDfs::MAX_FRAME_SIZE];
+        frame[0] = SimpleCommDfs::START_OF_FRAME;
         frame[1] = frameSize;
         frame[2] = fc;
         memcpy(&frame[3], data, dataLen);
@@ -707,14 +694,14 @@ private:
     }
 
     // "Scrolling" ring buffer for reception
-    ScrollBuffer<uint8_t, MAX_FRAME_SIZE> rxBuffer;
+    ScrollBuffer<uint8_t, SimpleCommDfs::MAX_FRAME_SIZE> rxBuffer;
 
     Result captureFrame(uint8_t expectedFc = 0, uint8_t* outFrame = nullptr, size_t* outLen = nullptr) {
 
-        const uint8_t sof = START_OF_FRAME;
+        const uint8_t sof = SimpleCommDfs::START_OF_FRAME;
 
         // D'abord on lit tout ce qui est disponible sur le port série
-        while (serial->available() && rxBuffer.size() < MAX_FRAME_SIZE) {
+        while (serial->available() && rxBuffer.size() < SimpleCommDfs::MAX_FRAME_SIZE) {
             rxBuffer.push(serial->read());
         }
 
@@ -754,7 +741,7 @@ private:
 
         // Vérifier LEN
         uint8_t frameSize = rxBuffer.peek(1);
-        if (frameSize < FRAME_OVERHEAD || frameSize > MAX_FRAME_SIZE) {
+        if (frameSize < SimpleCommDfs::FRAME_OVERHEAD || frameSize > SimpleCommDfs::MAX_FRAME_SIZE) {
             // Log SOF + LEN invalide
             #ifdef SIMPLECOMM_DEBUG
             uint8_t header[2];
@@ -776,7 +763,7 @@ private:
         }
 
         // On a une frame complète, on la copie pour le CRC
-        uint8_t tempFrame[MAX_FRAME_SIZE];
+        uint8_t tempFrame[SimpleCommDfs::MAX_FRAME_SIZE];
         for (uint8_t i = 0; i < frameSize; i++) {
             tempFrame[i] = rxBuffer.peek(i);
         }
@@ -854,7 +841,7 @@ private:
 
     // Find a proto by its FC
     ProtoStore* findProto(uint8_t fc) {
-        for(size_t i = 0; i < MAX_PROTOS; i++) {
+        for(size_t i = 0; i < SimpleCommDfs::MAX_PROTOS; i++) {
             if(protos[i].fc == fc) {
                 return &protos[i];
             }
@@ -864,8 +851,8 @@ private:
 
     // Find a free slot
     ProtoStore* findFreeSlot() {
-        for(size_t i = 0; i < MAX_PROTOS; i++) {
-            if(protos[i].fc == NULL_FC) {
+        for(size_t i = 0; i < SimpleCommDfs::MAX_PROTOS; i++) {
+            if(protos[i].fc == SimpleCommDfs::NULL_FC) {
                 return &protos[i];
             }
         }
@@ -885,17 +872,17 @@ private:
         }
         
         // Create the ACK FC (bit 7 = 1)
-        uint8_t ackFc = originalFc | FC_RESPONSE_BIT;
+        uint8_t ackFc = originalFc | SimpleCommDfs::FC_RESPONSE_BIT;
         
         // Vérifier qu'on a assez d'espace dans le buffer TX
-        size_t frameSize = payloadSize + FRAME_OVERHEAD;
+        size_t frameSize = payloadSize + SimpleCommDfs::FRAME_OVERHEAD;
         if(frameSize > serial->availableForWrite()) {
             return;  // Buffer TX plein, on ne peut pas envoyer l'ACK
         }
         
         // Construire la frame d'ACK
-        uint8_t frame[MAX_FRAME_SIZE];
-        frame[0] = START_OF_FRAME;
+        uint8_t frame[SimpleCommDfs::MAX_FRAME_SIZE];
+        frame[0] = SimpleCommDfs::START_OF_FRAME;
         frame[1] = frameSize;
         frame[2] = ackFc;
         memcpy(&frame[3], payload, payloadSize);
@@ -914,7 +901,7 @@ private:
 public:
     // Méthode pour les tests uniquement
     const ProtoStore* getProtoStore(uint8_t fc) const {
-        for(size_t i = 0; i < MAX_PROTOS; i++) {
+        for(size_t i = 0; i < SimpleCommDfs::MAX_PROTOS; i++) {
             if(protos[i].fc == fc) {
                 return &protos[i];
             }
