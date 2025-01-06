@@ -1,68 +1,30 @@
+TODO:
+- Ajouter un point sur l'approche template
+- Ajouter un point sur l'utilisation ACK en cas d'erreur (early return dans le handler)
+- Retirer les noms des messages (inutile)
+
 # SimpleComm Documentation
 
-> **A lightweight, robust, and straightforward library for secure structured communication over UART between microcontrollers (e.g., ESP32 & STM32).**
+> **A lightweight, robust, and straightforward messaging library for secure structured communication between microcontrollers**
 
 This document provides a thorough overview of **SimpleComm**, from its motivations and design rationale to detailed usage examples, advanced features, and testing strategies. It is intended for professional developers who need a dependable solution without excessive overhead or complex toolchains.
 
----
-
-## Table of Contents
-1. [Introduction](#introduction)  
-2. [Design Goals & Motivations](#design-goals--motivations)  
-   - [Why Not Protobuf, SerialCommands, or TinyFrame?](#why-not-protobuf-serialcommands-or-tinyframe)  
-3. [Key Features (USPs)](#key-features-usps)  
-4. [Architecture & Design Overview](#architecture--design-overview)  
-   - [Communication Model](#communication-model)  
-   - [Transport Layer](#transport-layer)  
-   - [Synchronous vs. Asynchronous](#synchronous-vs-asynchronous)  
-5. [Getting Started](#getting-started)  
-   - [Directory Structure](#directory-structure)  
-   - [Installation](#installation)  
-   - [Quick Example (Arduino-Style)](#quick-example-arduino-style)  
-6. [Defining & Registering Prototypes (Protos)](#defining--registering-prototypes-protos)  
-   - [Message Types](#message-types)  
-   - [Naming & ID Rules](#naming--id-rules)  
-   - [Example Proto Declarations](#example-proto-declarations)  
-   - [Callbacks & Handlers](#callbacks--handlers)  
-7. [Sending & Receiving Messages](#sending--receiving-messages)  
-   - [Sending One-Way Messages (`MESSAGE`)](#sending-one-way-messages-message)  
-   - [Sending Acknowledged Messages (`MESSAGE_ACK`)](#sending-acknowledged-messages-message_ack)  
-   - [Request/Response Exchanges (`REQUEST` & `RESPONSE`)](#requestresponse-exchanges-request--response)  
-8. [Error Handling & Diagnostics](#error-handling--diagnostics)  
-   - [Typical Error Codes](#typical-error-codes)  
-   - [Debugging](#debugging)  
-9. [Advanced Usage](#advanced-usage)  
-   - [Using Custom TX/RX Callbacks (Non-Arduino)](#using-custom-txrx-callbacks-non-arduino)  
-   - [Asynchronous Handling](#asynchronous-handling)  
-   - [Buffer Management & Large Frames](#buffer-management--large-frames)  
-   - [CRC Validation & Protocol Robustness](#crc-validation--protocol-robustness)  
-10. [Practical Considerations & Best Practices](#practical-considerations--best-practices)  
-11. [Testing & Validation](#testing--validation)  
-    - [Native Unit Tests](#native-unit-tests)  
-    - [Hardware Integration Tests](#hardware-integration-tests)  
-12. [Examples](#examples)  
-    - [Arduino Examples](#arduino-examples)  
-    - [ESP-IDF Examples](#esp-idf-examples)  
-13. [FAQ](#faq)  
-14. [License](#license)  
-
----
-
 ## 1. Introduction
 
-**SimpleComm** is a C++ library designed for **lightweight, robust, and secure communication** between microcontrollers (typically via UART). Its primary goal is to **simplify** the process of exchanging structured binary data, without requiring you to define your own protocol from scratch or adopt complex serialization frameworks.
+**SimpleComm** is a C++ library designed for **lightweight, robust, and secure communication** between microcontrollers (typically via UART, but suitable to any transport layer sending bytes or packets). Its primary goal is to **simplify** the process of exchanging structured binary data, without requiring you to define your own protocol from scratch or adopt complex serialization frameworks.
 
 Key design points:
-- Minimal Flash/RAM footprint (as low as ~1KB code size).  
-- Straightforward API with a strong focus on reliability and explicit error reporting.  
+- Minimal Flash/RAM footprint (as low as ~1.5KB code size, optimization WIP): suitable for the most constrained microcontrollers such as STM32F03x series.
+- Straightforward API with a strong focus on reliability and explicit error reporting. 
+- User-friendly, declarative approach to define message prototypes. 
 - Built-in support for **messages** (one-way), **acknowledged messages**, and **request/response** flows.  
 - Extendable with your own structured types (PODs).  
 - **No** code generation toolchain required (unlike Protobuf/Cap’nProto).  
-- Works seamlessly on **Arduino** platforms or via custom TX/RX callbacks on bare-metal STM32 or RTOS-based firmware.
+- Works seamlessly on **Arduino** platforms or via custom TX/RX callbacks on bare-metal or RTOS-based firmware as long as your target supports C++11.
 
 Whether you are building a Master/Slave setup over UART or need robust bidirectional communications, **SimpleComm** aims to keep things **KISS** (Keep It Simple, Stupid) while maximizing runtime safety (CRC checks, well-defined message boundaries, error codes, etc.).
 
----
+Note: the current implementation is fully tested and functional (see below for details), but work is still in progress to reduce the compiled code size and make it more robust. I strongly believe the template approach is the best way to go to offer both a highly user-friendly & secure solution, but I'm considering reducing the differentiation early in the message processing pipeline to avoid code duplication, which would further reduce the code size down to less than 1KB.
 
 ## 2. Design Goals & Motivations
 
@@ -79,9 +41,7 @@ Whether you are building a Master/Slave setup over UART or need robust bidirecti
 - Declare message structures in pure C++ with minimal boilerplate.  
 - Rely on compile-time checks (via templates & `static_assert`s) for correctness.  
 - Have built-in request/response, acknowledgment flows, and detailed error codes.  
-- Keep code size minimal (~1KB).
-
----
+- Keep code size minimal.
 
 ## 3. Key Features (USPs)
 
@@ -90,7 +50,7 @@ Whether you are building a Master/Slave setup over UART or need robust bidirecti
    - No manual parsing logic; a message is always read/written as a strongly typed C++ struct.
 
 2. **Lightweight Footprint**:  
-   - Fits into tight STM32 flash constraints (on the order of 1KB compiled).
+   - Fits into tight STM32 flash constraints (on the order of 1.5KB compiled).
 
 3. **Full Safety by Default**:  
    - CRC16 for integrity checking on all frames.  
@@ -100,20 +60,17 @@ Whether you are building a Master/Slave setup over UART or need robust bidirecti
 4. **Flexible Usage**:  
    - **Synchronous** approach by default (for acknowledgment or request/response).  
    - **Asynchronous** usage if you only need unidirectional messages.  
-   - Arduino-friendly constructors or custom callbacks for “bare-metal” usage.
 
 5. **Transport Agnostic**:  
    - Built-in support for **Arduino `HardwareSerial`**.  
    - Alternative approach: provide your own TX/RX callbacks (interrupt, DMA, RTOS queues, etc.).  
 
----
-
 ## 4. Architecture & Design Overview
 
 ### Communication Model
-SimpleComm implements a **frame-based** protocol over a raw byte stream:
+SimpleComm implements a simple **frame-based** protocol over a raw byte stream:
 - Each frame starts with a **Start of Frame (SOF) byte** `0xAA`.  
-- Followed by **length**, **function code (ID)**, the **payload**, and **CRC16**.  
+- Followed by **length**, **message identifier (ID)**, the **payload**, and **CRC16**.  
 
 Internally, the library:
 - Buffers incoming bytes in a small ring buffer (`ScrollBuffer`).  
@@ -122,49 +79,28 @@ Internally, the library:
 - Calls the corresponding handler if registered.
 
 ### Transport Layer
-- By default (Arduino mode), you provide a `HardwareSerial*`. The library will `write()` frames out and `read()` bytes in.  
-- In “expert” mode, you can supply custom `std::function<size_t(const uint8_t*, size_t)>` for TX and `std::function<size_t(uint8_t*, size_t)>` for RX. This allows integration with any hardware driver, buffer, or OS primitives.
+- By default ("Arduino mode"), you provide a `HardwareSerial*`. The library will `write()` frames out and `read()` bytes in automatically.  
+- Otherwise, you can supply custom callbacks: `std::function<size_t(const uint8_t*, size_t)>` for TX and `std::function<size_t(uint8_t*, size_t)>` for RX. They will be called automatically by the library when needed. This allows integration with any hardware driver, buffer, or OS primitives.
 
 ### Synchronous vs. Asynchronous
 - **Synchronous**: For `MESSAGE_ACK` or `REQUEST/RESPONSE`, SimpleComm blocks internally waiting for the correct acknowledgment or response. It also cleans the receive buffer to avoid stale data.  
 - **Asynchronous**: For `MESSAGE` type, no response is expected, so the user can simply send and forget.
 
----
-
 ## 5. Getting Started
 
 ### Directory Structure
-A typical PlatformIO / Arduino library layout is shown below (taken from this repository’s example):
+A minimal project layout example is shown below:
 
 ```
-├── examples/ 
-│ ├── arduino/ 
-│ │ ├── loopback.cpp 
-│ │ ├── master.cpp 
-│ │ └── slave.cpp 
-│ └── esp-idf/ 
-│ ├── master.cpp 
-│ └── slave.cpp 
-├── include/ 
-│ └── README 
 ├── lib/ 
-│ ├── SimpleComm/ 
-│ │   └── src/ 
-│ │       ├── ScrollBuffer.h 
-│ │       ├── SimpleComm_Proto.h 
-│ │       └── SimpleComm.h 
-│ └── README 
+│ └── SimpleComm/             <- Library files
+│     └── src/ 
+│         ├── ScrollBuffer.h
+│         └── SimpleComm.h 
 ├── src/ 
-│   └── main.cpp 
-├── test/ 
-│   ├── test_hardware/ 
-│   │   └── test_main.cpp 
-│   ├── test_native/ 
-│   │   ├── mock/ 
-│   │   │   └── Arduino.h 
-│   │   └── test_main.cpp 
-│   └── README 
-└── platformio.ini
+│   └── main.cpp              <- Your application code
+└── include/ 
+    └── SimpleComm_Proto.h    <- Your message prototypes (shared between all targets)
 ```
 
 
@@ -238,31 +174,31 @@ using ProtoType = SimpleComm::ProtoType;
 
 struct SetLedMsg {
     static constexpr ProtoType type = ProtoType::MESSAGE;
-    static constexpr const char* name = "SET_LED";
     static constexpr uint8_t id = 1;
+    static constexpr const char* name = "SET_LED";
     uint8_t state;  // 0=OFF, 1=ON
 } __attribute__((packed));
 
 struct SetPwmMsg {
     static constexpr ProtoType type = ProtoType::MESSAGE_ACK;
-    static constexpr const char* name = "SET_PWM";
     static constexpr uint8_t id = 2;
+    static constexpr const char* name = "SET_PWM";
     uint8_t pin;
     uint32_t freq;  
 } __attribute__((packed));
 
 struct StatusResponseMsg {
     static constexpr ProtoType type = ProtoType::RESPONSE;
-    static constexpr const char* name = "RSP_STA";
     static constexpr uint8_t id = 3; // same as the request's ID
+    static constexpr const char* name = "RSP_STA";
     uint8_t state;
     uint32_t uptime;
 } __attribute__((packed));
 
 struct GetStatusMsg {
     static constexpr ProtoType type = ProtoType::REQUEST;
-    static constexpr const char* name = "REQ_STA";
     static constexpr uint8_t id = 3;
+    static constexpr const char* name = "REQ_STA";
     using ResponseType = StatusResponseMsg;
 } __attribute__((packed));
 ```
@@ -273,6 +209,7 @@ After registering a proto, you can attach a callback:
   `comm.onReceive<T>([](const T& msg) { /* handle */ });`
 - **For `REQUEST`**:  
   `comm.onRequest<REQ>([](const REQ& req, typename REQ::ResponseType& resp){ /* fill resp */ });`
+Callbacks will be automatically called by the library when a matching message is received.
 
 Example:
 ```cpp
@@ -306,6 +243,7 @@ if (result != SimpleComm::SUCCESS) {
 ```
 - Under the hood, the library clears the RX buffer, sends `SetPwmMsg`, and waits for an exact echo (flipped ID).
 - If no echo arrives (or it mismatches the data), you get an error.
+- The approach is deliberately synchronous (i.e. blocking) to ensure message delivery and avoid issues with sending the same message multiple times.
 
 ### Request/Response Exchanges (`REQUEST` & `RESPONSE`)
 ```cpp
@@ -328,8 +266,6 @@ else {
   });
   ```
 
----
-
 ## 8. Error Handling & Diagnostics
 
 ### Typical Error Codes
@@ -341,14 +277,16 @@ SimpleComm’s `Status` enum covers both registration errors and runtime failure
 - `ERR_RCV_TIMEOUT` (No response in expected time)  
 - `ERR_BUSY_RECEIVING` (Attempted to send a message while a frame is partially captured)  
 - `ERR_HW_TX_FAILED` (Transmission hardware buffer full, or TX error)
+-...
 
 You receive them as a `Result` struct:  
 ```cpp
 struct Result {
-  Status status;
-  uint8_t id;  
+  Status status; // Status or error code (enum above)
+  uint8_t id;    // Message ID (0 if irrelevant)
 };
 ```
+The "==" and "!=" operators are overloaded for `Result` so you can easily check the status without having to extract it from the struct.
 
 ### Debugging
 If you define `SIMPLECOMM_DEBUG` (e.g., in `platformio.ini` or as a compiler flag) and supply a debug `Stream*`, the library will print logs (hex dumps of frames, error messages, etc.).
@@ -359,8 +297,7 @@ If you define `SIMPLECOMM_DEBUG` (e.g., in `platformio.ini` or as a compiler fla
 ...
 SimpleComm comm(&Serial1, 500, &Serial, "MASTER_INSTANCE");
 ```
-
----
+This makes debugging especially easier on the Arduino framework, where you can easily attach a custom logger or Serial port to the debug stream.
 
 ## 9. Advanced Usage
 
@@ -384,19 +321,19 @@ This way, you control how bytes are sent/received. This is especially useful in 
 ### Asynchronous Handling
 If you want purely asynchronous behavior:
 - Use only `MESSAGE` types or treat each exchange as unidirectional.  
-- You can periodically call `comm.poll()` to process inbound frames.  
+- You can call `comm.poll()` periodically or within a specific task/thread to process inbound frames.  
 - For concurrency, note that SimpleComm is **not** inherently thread-safe. If multiple threads call `sendMsg()` concurrently, you must protect them externally.
 
 ### Buffer Management & Large Frames
 - By default, `MAX_FRAME_SIZE` is set to `32`. This limits the maximum payload. You can adjust it in `SimpleCommDfs` if needed.  
-- A ring buffer approach ensures partial frames or garbage are eventually discarded without losing valid subsequent frames.
+- The "scroll buffer" approach implemented in the library ensures partial frames or garbage are eventually discarded without losing any valid subsequent frames. 
+- Several error cases have been thought of and handled, such as truncated frame, invalid length, invalid SOF, SOF present in data, etc. See unit tests for more details.
+- TLDR: as long as you continuously call `poll()` on the receiver side, the message processing pipeline will jump from one frame to the next and end up synchronizing with the next valid frame even if there's garbage in-between.
 
 ### CRC Validation & Protocol Robustness
 - Every frame includes a 2-byte CRC16.  
 - The library discards frames with invalid CRC, tries to find the next valid SOF in the buffer, and continues.  
 - If you have extremely noisy lines, consider adding re-transmissions or switching to `MESSAGE_ACK` or `REQUEST/RESPONSE` flows for guaranteed data integrity.
-
----
 
 ## 10. Practical Considerations & Best Practices
 
@@ -419,55 +356,35 @@ Under `test/test_native`, there are `UNITY`-based tests that run on a desktop en
 
 To run them locally (PlatformIO example):
 ```sh
-pio test -e native
+pio test -e native_test
 ```
 
 ### Hardware Integration Tests
-Under `test/test_hardware`, you’ll find tests that run on actual boards (ESP32 or Arduino) exchanging messages across real UART pins. This verifies timing, buffering, and physical transport behavior.  
+Under `test/test_hardware`, you’ll find tests that run on actual hardware, exchanging messages across real UART lines. This verifies timing, buffering, and physical transport behavior. The tests have been run on an ESP32S3 dev board in a "loopback" setup (2 UART peripherals chained together with RX/TX pins crossed). 
 
 ```sh
-pio test -e esp32dev
+pio test -e hardware_test
 ```
 
----
+As a side note, the performance was measured at a gross ~4 ms round-trip time per `MESSAGE_ACK` (no processing in the callback) for a baud rate of 115200 bps.
 
 ## 12. Examples
 
 ### Arduino Examples
 Inside `examples/arduino/`:
-- **`loopback.cpp`**: A simple loopback test on a single device.  
+- **`loopback.cpp`**: A simple loopback test on a single device with logging.  
 - **`master.cpp` & `slave.cpp`**: A typical Master/Slave scenario. The master sends `SetLedMsg` or `GetStatusMsg`, and the slave toggles a pin or responds with uptime data.
 
 ### ESP-IDF Examples
 Under `examples/esp-idf/`:
 - Illustrates using `SimpleComm` in a typical ESP-IDF project, with non-Arduino drivers.
 
----
-
-## 13. FAQ
-
-1. **Q**: *I keep getting `ERR_SND_INVALID_ID`: what does this mean?*  
-   **A**: The message ID you are trying to send was never registered (`registerRequest<T>()` or `registerResponse<T>()`). Make sure you register **all** your message types first.
-
-2. **Q**: *What if I need bigger than 32-byte frames?*  
-   **A**: Increase `MAX_FRAME_SIZE` in `SimpleCommDfs`. This will also increase the ring buffer size. Ensure it still fits your device’s memory constraints.
-
-3. **Q**: *Can I have multiple requests in flight at once?*  
-   **A**: The library’s synchronous approach expects you to finish one request/response before starting another. If you need concurrency, consider asynchronous patterns or writing concurrency wrappers around the library.
-
-4. **Q**: *Does it handle half-duplex (RS-485) automatically?*  
-   **A**: No built-in half-duplex control. You can integrate your RS-485 driver toggling in the custom TX callback though.
-
----
-
-## 14. License
+## 13. License
 This library is released under the [MIT License](./LICENSE) (if applicable). Feel free to use and modify it to suit your needs.
-
----
 
 ## Final Notes
 **SimpleComm**’s approach is intentionally **minimalistic**, but it offers enough structure to avoid “reinventing the wheel” each time you need robust UART-based message handling. With compile-time validation, CRC checks, and straightforward message definitions, you can focus on **business logic** rather than protocol plumbing.
 
-If you encounter issues or have feature requests, please open an issue or PR on the GitHub repository (if public), or adapt the code in your private repository if needed.
+If you encounter issues or have feature requests, please open an issue or PR on the repo! I'll be happy to get feedback and contributions to improve the library.
 
 **Happy hacking!** 

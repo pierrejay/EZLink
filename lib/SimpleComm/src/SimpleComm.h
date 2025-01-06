@@ -291,7 +291,6 @@ public:
                      "You tried to register a RESPONSE with registerRequest() - use registerResponse() for RESPONSE types");
         static_assert(T::id != SimpleCommDfs::NULL_ID, "ID=0 is reserved/invalid");
         static_assert((T::id & SimpleCommDfs::ID_RESPONSE_BIT) == 0, "Request ID must be <= 127");
-        static_assert(T::name != nullptr, "Message must have a name");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert(sizeof(T) + SimpleCommDfs::FRAME_OVERHEAD <= SimpleCommDfs::MAX_FRAME_SIZE, "Message too large");
         return registerProtoInternal<T>(T::id);
@@ -305,7 +304,6 @@ public:
                      "Wrong message type - registerResponse() only works with RESPONSE types");
         static_assert(T::id != SimpleCommDfs::NULL_ID, "ID=0 is reserved/invalid");
         static_assert((T::id & SimpleCommDfs::ID_RESPONSE_BIT) == 0, "Response ID must be <= 127");
-        static_assert(T::name != nullptr, "Message must have a name");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert(sizeof(T) + SimpleCommDfs::FRAME_OVERHEAD <= SimpleCommDfs::MAX_FRAME_SIZE, "Message too large");
 
@@ -680,19 +678,11 @@ private:
     Result registerProtoInternal(uint8_t id) {
         // Proto validation is already done in registerRequest() and registerResponse()
         
-        // Invalid names (nullptr or "") are blocked at compilation
-        if(T::name == nullptr || T::name[0] == '\0') {
-            return Error(ERR_INVALID_NAME, T::id);
-        }
-        
         // Check if already registered (by ID or by name)
         for(size_t i = 0; i < SimpleCommDfs::MAX_PROTOS; i++) {
             if(protos[i].id != SimpleCommDfs::NULL_ID) {
                 if(protos[i].id == id) {  // On compare avec le ID modifié !
                     return Error(ERR_ID_ALREADY_REGISTERED, T::id);
-                }
-                if(strEqual(protos[i].name, T::name)) {
-                    return Error(ERR_NAME_ALREADY_REGISTERED, T::id);
                 }
             }
         }
@@ -707,7 +697,6 @@ private:
         slot->id = id;  // Use the modified ID passed as parameter
         slot->type = T::type;
         slot->size = sizeof(T);
-        slot->name = T::name;  // Store the name
         
         return Success(T::id);
     }
@@ -721,9 +710,6 @@ private:
         ProtoStore* proto = findProto(id);
         if (proto == nullptr) {
             return Error(ERR_SND_INVALID_ID, id);
-        }
-        if (!strEqual(proto->name, T::name)) {
-            return Error(ERR_SND_PROTO_MISMATCH, id);
         }
         if(outProto) {
             *outProto = proto;
@@ -935,9 +921,6 @@ private:
         ProtoStore* proto = findProto(T::id);
         if(proto == nullptr) {
             return Error(ERR_REG_INVALID_ID, T::id);
-        }
-        if (!strEqual(proto->name, T::name)) {
-            return Error(ERR_REG_PROTO_MISMATCH, T::id);
         }
         
         proto->callback = [handler](const void* data) {

@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <unity.h>
+#include <vector>
 #include "SimpleComm.h"
 #include "SimpleComm_Proto.h"
 
@@ -20,7 +21,6 @@ TaskHandle_t slaveTask = NULL;
 // Message avec payload maximum
 struct MaxPayloadMsg {
     static constexpr ProtoType type = ProtoType::MESSAGE;
-    static constexpr const char* name = "MAX_PAYLOAD";
     static constexpr uint8_t id = 10;
     uint8_t data[SimpleCommDfs::MAX_FRAME_SIZE - SimpleCommDfs::FRAME_OVERHEAD];  // Taille maximale possible
 } __attribute__((packed));
@@ -28,7 +28,6 @@ struct MaxPayloadMsg {
 // Message avec payload vide
 struct EmptyMsg {
     static constexpr ProtoType type = ProtoType::MESSAGE;
-    static constexpr const char* name = "EMPTY";
     static constexpr uint8_t id = 11;
     // Pas de données !
 } __attribute__((packed));
@@ -36,7 +35,6 @@ struct EmptyMsg {
 // Message pour test en rafale
 struct BurstMsg {
     static constexpr ProtoType type = ProtoType::MESSAGE_ACK;  // On utilise ACK pour vérifier la réception
-    static constexpr const char* name = "BURST";
     static constexpr uint8_t id = 12;
     uint32_t sequence;  // Numéro de séquence pour vérifier l'ordre
 } __attribute__((packed));
@@ -44,7 +42,6 @@ struct BurstMsg {
 // Messages pour test bidirectionnel
 struct PongMsg {
     static constexpr ProtoType type = ProtoType::RESPONSE;
-    static constexpr const char* name = "PONG";
     static constexpr uint8_t id = 13;
     uint32_t echo_timestamp;
     uint32_t response_timestamp;
@@ -52,7 +49,6 @@ struct PongMsg {
 
 struct PingMsg {
     static constexpr ProtoType type = ProtoType::REQUEST;
-    static constexpr const char* name = "PING";
     static constexpr uint8_t id = 13;
     uint32_t timestamp;
     using ResponseType = PongMsg;

@@ -6,63 +6,49 @@
 // Test messages
 struct BorderlineMsg {
     static constexpr ProtoType type = ProtoType::MESSAGE;
-    static constexpr const char* name = "BORDERLINE";
     static constexpr uint8_t id = 10;
     uint8_t data[SimpleCommDfs::MAX_FRAME_SIZE - SimpleCommDfs::FRAME_OVERHEAD];
-};
+} __attribute__((packed));
 
 struct DuplicateNameMsg {
+    static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr uint8_t id = 20;
-    static constexpr ProtoType type = ProtoType::MESSAGE;
-    static constexpr const char* name = "SET_LED";  // Same name as SetLedMsg
     uint8_t value;
-};
-
-struct SameIdMsg {
-    static constexpr uint8_t id = SetLedMsg::id;  // Same ID
-    static constexpr ProtoType type = ProtoType::MESSAGE;
-    static constexpr const char* name = "DIFFERENT";
-    uint8_t value;
-};
+} __attribute__((packed));
 
 // Not used (test blocked at compilation => OK)
 struct NullNameMsg {
-    static constexpr uint8_t id = 30;
     static constexpr ProtoType type = ProtoType::MESSAGE;
-    static constexpr const char* name = nullptr;
+    static constexpr uint8_t id = 30;
     uint8_t value;
-};
+} __attribute__((packed));
 
 // Not used (test blocked at compilation => OK)
 struct EmptyNameMsg {
-    static constexpr uint8_t id = 31;
     static constexpr ProtoType type = ProtoType::MESSAGE;
-    static constexpr const char* name = "";  // Empty string
+    static constexpr uint8_t id = 31;
     uint8_t value;
-};
+} __attribute__((packed));
 
 struct ComplexMsg {
-    static constexpr uint8_t id = 32;
     static constexpr ProtoType type = ProtoType::MESSAGE;
-    static constexpr const char* name = "COMPLEX";
+    static constexpr uint8_t id = 32;
     uint32_t array[4];
     int16_t coordinates[3];
     uint8_t flags;
-};
+} __attribute__((packed));
 
 struct MinimalMsg {
-    static constexpr uint8_t id = 33;
     static constexpr ProtoType type = ProtoType::MESSAGE;
-    static constexpr const char* name = "MINIMAL";
+    static constexpr uint8_t id = 33;
     uint8_t dummy;  // Minimal message of one byte
-};
+} __attribute__((packed));
 
 // Structures pour les tests de ID Request/Response
 struct TestResponseMsg;  // Forward declaration nécessaire car TestRequestMsg y fait référence
 
 struct TestRequestMsg {
     static constexpr ProtoType type = ProtoType::REQUEST;
-    static constexpr const char* name = "TEST_REQ";
     static constexpr uint8_t id = 42;  // ID arbitraire entre 1-127
     using ResponseType = TestResponseMsg;  // Utilise TestResponseMsg qui doit être déclaré avant
     uint8_t data;
@@ -70,14 +56,12 @@ struct TestRequestMsg {
 
 struct TestResponseMsg {
     static constexpr ProtoType type = ProtoType::RESPONSE;
-    static constexpr const char* name = "TEST_RESP";
     static constexpr uint8_t id = 42;  // Même ID que la requête
     uint8_t data;
 } __attribute__((packed));
 
 struct WrongResponseMsg {
     static constexpr ProtoType type = ProtoType::RESPONSE;
-    static constexpr const char* name = "WRONG_RESP";
     static constexpr uint8_t id = 43;  // Different de TestRequestMsg::id !
     uint8_t data;
 } __attribute__((packed));
@@ -499,45 +483,6 @@ void test_set_timeout(void) {
     TEST_ASSERT_FALSE(comm.setResponseTimeout(0));
 }
 
-void test_name_collisions(void) {
-    MockSerial serial;
-    serial.reset();
-    SimpleComm comm(&serial);
-    
-    comm.registerRequest<SetLedMsg>();
-    auto result = comm.registerRequest<DuplicateNameMsg>();
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_NAME_ALREADY_REGISTERED, result.status);
-}
-
-void test_proto_mismatch(void) {
-    MockSerial serial;
-    serial.reset();
-    SimpleComm comm(&serial);
-    
-    comm.registerRequest<SetLedMsg>();
-    
-    // Try to use a message with the same ID but a different name
-    SameIdMsg msg{.value = 1};
-    auto result = comm.sendMsg(msg);
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_SND_PROTO_MISMATCH, result.status);
-}
-
-void test_handler_wrong_name(void) {
-    MockSerial serial;
-    serial.reset();
-    SimpleComm comm(&serial);
-    
-    comm.registerRequest<SetLedMsg>();
-    
-    // Try to register a handler for a message with the same ID but different name
-    auto result = comm.onReceive<SameIdMsg>([](const SameIdMsg&) {});
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_REG_PROTO_MISMATCH, result.status);
-}
-
-void test_invalid_names(void) {
-    // ... removed because it's impossible to test (blocked at compilation => OK)
-}
-
 void test_complex_data(void) {
     MockSerial serial;
     serial.reset();
@@ -890,9 +835,6 @@ int main(void) {
     
     // Tests d'enregistrement et validation des protos
     RUN_TEST(test_register_proto);
-    RUN_TEST(test_name_collisions);
-    RUN_TEST(test_proto_mismatch);
-    RUN_TEST(test_handler_wrong_name);
     
     // Tests de communication basique
     RUN_TEST(test_send_msg);
