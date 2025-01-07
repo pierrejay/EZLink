@@ -29,9 +29,9 @@ Note: the current implementation is fully tested and functional (see below for d
 #include "SimpleComm.h"
 using ProtoType = SimpleComm::ProtoType;
 
-// Simple control message
+// Simple control message with acknowledgment
 struct ControlMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE;
+    static constexpr ProtoType type = ProtoType::MESSAGE_ACK;
     static constexpr uint8_t id = 1;
     
     uint8_t channel;     // Which channel to control
@@ -60,7 +60,7 @@ void loop() {
         .value = 1000,
         .flags = 0x01
     };
-    master.sendMsg(msg);
+    master.sendMsgAck(msg);
     delay(1000);
 }
 ```
@@ -81,7 +81,8 @@ void setup() {
     slave.onReceive<ControlMsg>([](const ControlMsg& msg) {
         // Process received message
         processControl(msg.channel, msg.value, msg.flags);
-    });
+    }); 
+    // Acknowledgment is automatically sent back to the master after processing
 }
 
 void loop() {
@@ -304,6 +305,7 @@ if (result != SimpleComm::SUCCESS) {
 - Under the hood, the library clears the RX buffer, sends `SetPwmMsg`, and waits for an exact echo (flipped ID).
 - If no echo arrives (or it mismatches the data), you get an error.
 - The approach is deliberately synchronous (i.e. blocking) to ensure message delivery and avoid issues with sending the same message multiple times.
+- Echo is sent after executing the receiver's `onReceive` callback : when an echo is received, the sender is sure that the receiver is ready to process the next incoming message.
 
 ### Request/Response Exchanges (`REQUEST` & `RESPONSE`)
 ```cpp
@@ -325,6 +327,8 @@ else {
       resp.uptime = millis();
   });
   ```
+- Reponse is sent after executing the receiver's `onRequest` callback : when a response is received, the sender is sure that the receiver is ready to process the next incoming request.
+
 
 ## Architecture & Design Overview
 
@@ -356,7 +360,28 @@ Internally, the library:
 
 ### Transport Layer
 - By default ("Arduino mode"), you provide a `HardwareSerial*`. The library will `write()` frames out and `read()` bytes in automatically.  
-- Otherwise, you can supply custom callbacks: `std::function<size_t(const uint8_t*, size_t)>` for TX and `std::function<size_t(uint8_t*, size_t)>` for RX. They will be called automatically by the library when needed. This allows integration with any hardware driver, buffer, or OS primitives.
+- Otherwise, you can supply custom callbacks (`std::function` handlers):
+  - `TxCallback` for TX
+  - `RxCallback` for RX
+- They will be called automatically by the library when needed to send and receive bytes to the hardware interface. This allows integration with any hardware driver, buffer, or OS primitives.
+- The transport layer supports response timeout and transmission errors handling. However, retries are not handled by the library, you need to implement the logic yourself is required.
+
+### Using Custom TX/RX Callbacks
+For non-Arduino environments, instead of passing a `HardwareSerial*`, construct with:
+```cpp
+SimpleComm::TxCallback txCb = [](const uint8_t* data, size_t len) {
+    // Write to your custom UART driver
+    return yourCustomUartWrite(data, len);
+};
+SimpleComm::RxCallback rxCb = [](uint8_t* data, size_t maxLen) {
+    // Read from your custom UART driver
+    return yourCustomUartRead(data, maxLen);
+};
+
+SimpleComm comm(txCb, rxCb);
+comm.begin();
+```
+This way, you control how bytes are sent/received. This is especially useful in RTOS contexts or when using DMA-based ring buffers.
 
 ### Synchronous vs. Asynchronous
 - **Synchronous**: For `MESSAGE_ACK` or `REQUEST/RESPONSE`, SimpleComm blocks internally waiting for the correct acknowledgment or response. It also cleans the receive buffer to avoid stale data.  
@@ -452,25 +477,6 @@ The debug output to a `Stream` will provide:
 
 This makes debugging very easy on the Arduino framework, where you can easily attach a custom logger or Serial port to the debug stream.
 
-## Advanced Usage
-
-### Using Custom TX/RX Callbacks (Non-Arduino)
-Instead of passing a `HardwareSerial*`, construct with:
-```cpp
-SimpleComm::TxCallback txCb = [](const uint8_t* data, size_t len) {
-    // Write to your custom UART driver
-    return yourCustomUartWrite(data, len);
-};
-SimpleComm::RxCallback rxCb = [](uint8_t* data, size_t maxLen) {
-    // Read from your custom UART driver
-    return yourCustomUartRead(data, maxLen);
-};
-
-SimpleComm comm(txCb, rxCb);
-comm.begin();
-```
-This way, you control how bytes are sent/received. This is especially useful in RTOS contexts or when using DMA-based ring buffers.
-
 ### Asynchronous Handling
 If you want purely asynchronous behavior:
 - Use only `MESSAGE` types or treat each exchange as unidirectional.  
@@ -490,10 +496,11 @@ If you want purely asynchronous behavior:
 
 ## Practical Considerations & Best Practices
 
-- **Always** register the same prototypes on both ends (matching IDs, data sizes).  
+- **Always** register the same prototypes on both ends (matching IDs, data structures). Make sure to use a common Prototypes.h file. 
 - For reliable request/response, ensure the **response** struct is **registered before** the request struct or use a forward declaration.  
-- **Synchronous** patterns (like `sendMsgAck` or `sendRequest`) block until a response arrives or times out. In a busy system, call them from a context where blocking is acceptable.  
-- If you need fully async interactions, do not rely on the built-in synchronous request/response calls. Instead, use your own logic with unidirectional messages.  
+- **Synchronous** patterns (like `sendMsgAck` or `sendRequest`) block until a response arrives or times out. In a busy system, call them from a context where blocking the current thread is acceptable.  
+- Keep processing loops short inside callbacks to avoid the sender waiting for a response. If you need to perform long operations, consider using an asynchronous pattern with a second message to indicate the outcome of the operation.
+- If you need fully async interactions, do not rely on the built-in synchronous request/response calls. Instead, use your own logic with unidirectional messages.
 - If you see errors like `ERR_BUSY_RECEIVING`, it means a partial frame capture is ongoing. Wait or poll more frequently to allow the library to finish capturing the frame.  
 - For debugging, enabling `SIMPLECOMM_DEBUG` can help identify framing or registration issues quickly.
 
