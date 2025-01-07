@@ -1,6 +1,6 @@
 # SimpleComm Documentation
 
-> *Lightweight, robust, simple messaging library for secure structured communication between microcontrollers**
+> *Lightweight, robust, simple messaging library for secure structured communication between microcontrollers*
 
 This document provides a thorough overview of **SimpleComm**, from its motivations and design rationale to detailed usage examples, advanced features, and testing strategies. It is intended for professional developers who need a dependable solution without excessive overhead or complex toolchains.
 
