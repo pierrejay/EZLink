@@ -9,7 +9,7 @@ This document provides a thorough overview of **SimpleComm**, from its motivatio
 **SimpleComm** is a C++ library designed for **lightweight, robust, and secure communication** between microcontrollers (typically via UART, but suitable to any transport layer carrying binary data). Its primary goal is to **simplify** the process of exchanging structured binary frames, without requiring you to define your own protocol from scratch or adopt complex serialization frameworks.
 
 Key design points:
-- Minimal Flash/RAM footprint (as low as ~1.5KB code size, optimization WIP): suitable for the most constrained microcontrollers such as STM32F03x series.
+- Minimal Flash/RAM footprint (as low as ~2KB code size, optimization WIP): suitable for the most constrained microcontrollers such as STM32F03x series.
 - Simple API with a strong focus on reliability and explicit error reporting. 
 - User-friendly, declarative approach to define message prototypes. 
 - Built-in support for **messages** (one-way), **acknowledged messages**, and **request/response** flows.  
@@ -20,7 +20,7 @@ Key design points:
 
 Whether you are building a Master/Slave setup over UART or need robust bidirectional communications, **SimpleComm** aims to keep things **KISS** (Keep It Simple, Stupid) while maximizing runtime safety (CRC checks, well-defined message boundaries, error codes, etc.).
 
-Note: the current implementation is fully tested and functional (see below for details), but work is still in progress to improve the software. I am currently focused on further reducing code size. The template approach generates lots of duplicate code, taking up a significant space for each additional prototype (~500B). Serializing message structures earlier in the process would further reduce the code size down to less than 1KB + ~150B per message prototype.
+Note: the current implementation is fully tested and functional (see below for details), but work is still in progress to improve the software. I am currently focused on further reducing code size. The template approach generates lots of duplicate code, taking up ~500B of flash memory for each additional prototype. Serializing message structures earlier in the process should further reduce the code size down to less than 1KB + ~200B per message prototype.
 
 ## Design Goals & Motivations
 
@@ -46,7 +46,7 @@ Note: the current implementation is fully tested and functional (see below for d
    - No manual parsing logic; a message is always read/written as a strongly typed C++ struct.
 
 2. **Lightweight Footprint**:  
-   - Fits into tight STM32 flash constraints (on the order of 1.5KB compiled).
+   - Fits into tight STM32 flash constraints (on the order of 2KB compiled).
 
 3. **Full Safety by Default**:  
    - CRC16 for integrity checking on all frames.  
