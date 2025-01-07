@@ -535,7 +535,7 @@ Under `test/test_hardware`, you’ll find tests that run on actual hardware, exc
 pio test -e hardware_test
 ```
 
-As a side note, the performance was measured at a gross ~2.5ms round-trip time par `MESSAGE_ACK`/`REQUEST` (no processing in the callback) between ESP32S3s on a 115200 baud UART line, and as low as ~150µs using USB CDC between a RPi (running a Python script to encode and send frames) and an ESP32S3.
+As a side note, the raw performance was measured at a ~2.5ms round-trip time par `MESSAGE_ACK`/`REQUEST` (w/o processing in the callback) between two ESP32S3s on a 115200 baud UART line, and as low as ~150µs using USB CDC between an MBP M1 running a Python script and an ESP32S3, which means that the frame processing overhead is negligible compared to the transmission time.
 
 ## Examples
 
