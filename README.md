@@ -373,7 +373,7 @@ Under `test/test_hardware`, you’ll find tests that run on actual hardware, exc
 pio test -e hardware_test
 ```
 
-As a side note, the performance was measured at a gross ~4 ms round-trip time per `MESSAGE_ACK` (no processing in the callback) for a baud rate of 115200 bps.
+As a side note, the performance was measured at a gross ~0.2 ms round-trip time per `MESSAGE_ACK` (no processing in the callback) using an USB CDC line (the host being a RPi running a Python script sending the frames).
 
 ## Examples
 
