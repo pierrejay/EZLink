@@ -22,6 +22,75 @@ Whether you are building a Master/Slave setup over UART or need robust bidirecti
 
 Note: the current implementation is fully tested and functional (see below for details), but work is still in progress to improve the software. I am currently focused on further reducing code size. The template approach generates lots of duplicate code, taking up ~500B of flash memory for each additional prototype. Serializing message structures earlier in the process should further reduce the code size down to less than 1KB + ~200B per message prototype.
 
+## SimpleComm Minimal Example
+
+### Shared Message Definition (messages.h)
+```cpp
+#include "SimpleComm.h"
+using ProtoType = SimpleComm::ProtoType;
+
+// Simple control message
+struct ControlMsg {
+    static constexpr ProtoType type = ProtoType::MESSAGE;
+    static constexpr uint8_t id = 1;
+    
+    uint8_t channel;     // Which channel to control
+    uint16_t value;      // Control value
+    uint8_t flags;       // Control flags
+} __attribute__((packed));
+```
+
+### Master Code
+```cpp
+#include "SimpleComm.h"
+#include "messages.h"
+
+SimpleComm master(&Serial1);
+
+void setup() {
+    Serial1.begin(115200);
+    master.begin();
+    master.registerRequest<ControlMsg>();
+}
+
+void loop() {
+    // Send control message
+    ControlMsg msg{
+        .channel = 1,
+        .value = 1000,
+        .flags = 0x01
+    };
+    master.sendMsg(msg);
+    delay(1000);
+}
+```
+
+### Slave Code
+```cpp
+#include "SimpleComm.h"
+#include "messages.h"
+
+SimpleComm slave(&Serial1);
+
+void setup() {
+    Serial1.begin(115200);
+    slave.begin();
+    
+    // Register message and handler
+    slave.registerRequest<ControlMsg>();
+    slave.onReceive<ControlMsg>([](const ControlMsg& msg) {
+        // Process received message
+        processControl(msg.channel, msg.value, msg.flags);
+    });
+}
+
+void loop() {
+    slave.poll();  // Process incoming messages
+}
+```
+
+That's it! A complete bidirectional communication system in ~50 lines of code.
+
 ## Design Goals & Motivations
 
 ### Origin & Context
