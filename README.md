@@ -6,7 +6,7 @@ This document provides a thorough overview of **SimpleComm**, from its motivatio
 
 ## Introduction
 
-**SimpleComm** is a C++ library designed for **lightweight, robust, and secure communication** between microcontrollers (typically via UART, but suitable to any transport layer carrying binary data). Its primary goal is to **simplify** the process of exchanging structured binary frames, without requiring you to define your own protocol from scratch or adopt complex serialization frameworks.
+**SimpleComm** is a C++ library designed for **lightweight & robust communication** between microcontrollers (typically via UART, but suitable to any transport layer carrying binary data). Its primary goal is to **simplify** the process of exchanging structured binary frames, without requiring you to define your own protocol from scratch or adopt complex serialization frameworks.
 
 Key design points:
 - Minimal Flash/RAM footprint (as low as ~2KB code size, optimization WIP): suitable for the most constrained microcontrollers such as STM32F03x series.
@@ -15,8 +15,7 @@ Key design points:
 - Built-in support for **messages** (one-way), **acknowledged messages**, and **request/response** flows.  
 - Extendable with your own structured types (PODs).  
 - **No** code generation toolchain required (unlike Protobuf/Cap’nProto).  
-- Works seamlessly on **Arduino** platforms or via custom TX/RX callbacks on bare-metal or RTOS-based firmware as long as your target supports C++11.
-- Lighting fast.
+- Works seamlessly on **Arduino** platforms or via custom TX/RX callbacks on bare-metal/RTOS-based firmware as long as your target supports C++11.
 
 Whether you are building a Master/Slave setup over UART or need robust bidirectional communications, **SimpleComm** aims to keep things **KISS** (Keep It Simple, Stupid) while maximizing runtime safety (CRC checks, well-defined message boundaries, error codes, etc.).
 
@@ -417,9 +416,9 @@ If you want purely asynchronous behavior:
 - The library discards frames with invalid CRC, tries to find the next valid SOF in the buffer, and continues.  
 - If you have extremely noisy lines, consider adding re-transmissions or switching to `MESSAGE_ACK` or `REQUEST/RESPONSE` flows for guaranteed data integrity.
 
-## Error Handling & Diagnostics
+### Error Handling & Diagnostics
 
-### Overview
+#### Overview
 SimpleComm provides detailed error reporting through its `Status` enum and `Result` structure. Each operation returns a `Result` containing both a `status` code and the relevant message `id`.
 
 ```cpp
@@ -430,8 +429,6 @@ struct Result {
 ```
 
 The "==" and "!=" operators are overloaded for `Result` so you can easily check the status without having to extract it from the struct.
-
-### Error Categories
 
 #### Success Codes (0-9)
 | Code | Name | Description | Common Causes | Solution |
@@ -480,7 +477,7 @@ The "==" and "!=" operators are overloaded for `Result` so you can easily check 
 | 50 | `ERR_HW_FLOOD` | Hardware buffer overflow | Too much incoming data | Increase polling frequency |
 | 51 | `ERR_HW_TX_FAILED` | TX hardware failure | Buffer full, hardware error | Check hardware, retry |
 
-### Basic Error Handling Example
+#### Basic Error Handling Example
 ```cpp
 auto result = comm.sendMsg(msg);
 if (result != SimpleComm::SUCCESS) {
@@ -518,8 +515,6 @@ This makes debugging very easy on the Arduino framework, where you can easily at
 - If you see errors like `ERR_BUSY_RECEIVING`, it means a partial frame capture is ongoing. Wait or poll more frequently to allow the library to finish capturing the frame.  
 - For debugging, enabling `SIMPLECOMM_DEBUG` can help identify framing or registration issues quickly.
 
----
-
 ## Testing & Validation
 
 ### Native Unit Tests
@@ -540,7 +535,7 @@ Under `test/test_hardware`, you’ll find tests that run on actual hardware, exc
 pio test -e hardware_test
 ```
 
-As a side note, the performance was measured at a gross ~0.2 ms round-trip time per `MESSAGE_ACK` (no processing in the callback) using an USB CDC line (the host being a RPi running a Python script sending the frames).
+As a side note, the performance was measured at a gross ~2.5ms round-trip time par `MESSAGE_ACK`/`REQUEST` (no processing in the callback) between ESP32S3s on a 115200 baud UART line, and as low as ~150µs using USB CDC between a RPi (running a Python script to encode and send frames) and an ESP32S3.
 
 ## Examples
 
