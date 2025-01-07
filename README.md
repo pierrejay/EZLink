@@ -120,17 +120,13 @@ void loop() {
 ```
 On the Slave side, you would do something similar, registering SetLedMsg and providing a handler. See full examples under examples/.
 
-## 6. Defining & Registering Prototypes (Protos)
+## Defining & Registering Prototypes (Protos)
 
 ### Message Types
-1. **`MESSAGE`**  
-   A one-way message. No confirmation is expected.  
-2. **`MESSAGE_ACK`**  
-   A one-way message where the receiver automatically **echoes** the same message back (flipping ID bit 7).  
-3. **`REQUEST`**  
-   A message that requires a specific typed **`RESPONSE`**.  
-4. **`RESPONSE`**  
-   A message that answers a specific `REQUEST`.
+- **`MESSAGE`** : A one-way message. No confirmation is expected.  
+- **`MESSAGE_ACK`** : A one-way message where the receiver automatically **echoes** the same message back (flipping ID bit 7).  
+- **`REQUEST`** : A message that requires a specific typed **`RESPONSE`**.  
+- **`RESPONSE`** : A message that answers a specific `REQUEST`.
 
 ### Naming & ID Rules
 - Each proto struct declares:  
@@ -192,7 +188,7 @@ slave.onReceive<SetLedMsg>([](const SetLedMsg& msg) {
 
 ---
 
-## 7. Sending & Receiving Messages
+## Sending & Receiving Messages
 
 ### Sending One-Way Messages (`MESSAGE`)
 ```cpp
@@ -385,6 +381,10 @@ Inside `examples/arduino/`:
 ### ESP-IDF Examples
 Under `examples/esp-idf/`:
 - Illustrates using `SimpleComm` in a typical ESP-IDF project, with non-Arduino drivers.
+
+### Python Examples
+Under `examples/py-master/`:
+- Illustrates using `SimpleComm` in a Python script, with a master sending messages to a slave.
 
 ## License
 This library is released under the [MIT License](./LICENSE) (if applicable). Feel free to use and modify it to suit your needs.
