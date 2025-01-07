@@ -135,7 +135,6 @@ On the Slave side, you would do something similar, registering SetLedMsg and pro
 ### Naming & ID Rules
 - Each proto struct declares:  
   - `static constexpr ProtoType type;`  
-  - `static constexpr const char* name;`  
   - `static constexpr uint8_t id;` (must be in **1..127** for requests/messages).  
 - The library automatically uses `id | 0x80` for responses (IDs 128..255).  
 - `id=0` is invalid.  
@@ -358,7 +357,7 @@ If you want purely asynchronous behavior:
 
 ### Native Unit Tests
 Under `test/test_native`, there are `UNITY`-based tests that run on a desktop environment with a mock of `Arduino.h`. These tests cover:
-- Registration edge cases (duplicate ID, name collision, etc.).  
+- Registration edge cases (duplicate ID, etc.).  
 - Sending/receiving frames, partial frames, CRC errors.  
 - Request/response logic and timeouts.  
 
