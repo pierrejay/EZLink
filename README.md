@@ -60,7 +60,10 @@ void loop() {
         .value = 1000,
         .flags = 0x01
     };
-    master.sendMsgAck(msg);
+    auto result = master.sendMsgAck(msg);
+    if (result != SimpleComm::SUCCESS) {
+        // handle error
+    }
     delay(1000);
 }
 ```
@@ -86,7 +89,8 @@ void setup() {
 }
 
 void loop() {
-    slave.poll();  // Process incoming messages
+    // Process incoming messages
+    slave.poll();
 }
 ```
 
@@ -115,8 +119,9 @@ That's it! A complete bidirectional communication system in ~50 lines of code.
    - Minimal user API (just register your prototypes, send, receive, done).  
    - No manual parsing logic; a message is always read/written as a strongly typed C++ struct.
 
-2. **Lightweight Footprint**:  
+2. **Lightweight & fast**:  
    - Fits into tight STM32 flash constraints (on the order of 2KB compiled).
+   - Ultra-low latency communications.
 
 3. **Full Safety by Default**:  
    - CRC16 for integrity checking on all frames.  
@@ -186,30 +191,42 @@ Basically, each message received is sure to be of the type expected by its liste
 
 using ProtoType = SimpleComm::ProtoType;
 
-struct SetLedMsg {
+// Motor control message (one-way command)
+struct SetMotorMsg {
     static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr uint8_t id = 1;
-    uint8_t state;  // 0=OFF, 1=ON
+    uint8_t motor_id;      // Which motor (1-4)
+    int16_t speed;         // -1000 to +1000
+    uint8_t acceleration;  // 0-255
+    uint8_t mode;         // 0=normal, 1=smooth, 2=precise
 } __attribute__((packed));
 
-struct SetPwmMsg {
+// PID configuration (requires acknowledgment)
+struct ConfigPidMsg {
     static constexpr ProtoType type = ProtoType::MESSAGE_ACK;
     static constexpr uint8_t id = 2;
-    uint8_t pin;
-    uint32_t freq;  
+    uint8_t channel;    // Which control loop
+    float kp;          // Proportional gain
+    float ki;          // Integral gain
+    float kd;          // Derivative gain
 } __attribute__((packed));
 
-struct StatusResponseMsg {
+// Sensor data response
+struct SensorDataResponse {
     static constexpr ProtoType type = ProtoType::RESPONSE;
-    static constexpr uint8_t id = 3; // same as the request's ID
-    uint8_t state;
-    uint32_t uptime;
+    static constexpr uint8_t id = 3;
+    int16_t temperature;   // Celsius x100 (-4000 to +15000)
+    uint16_t humidity;     // RH x100 (0 to 10000)
+    uint32_t pressure;     // Pascal
+    uint8_t status;       // Bit flags for sensor status
 } __attribute__((packed));
 
-struct GetStatusMsg {
+// Request sensor data
+struct GetSensorDataMsg {
     static constexpr ProtoType type = ProtoType::REQUEST;
     static constexpr uint8_t id = 3;
-    using ResponseType = StatusResponseMsg;
+    uint8_t sensorId;      // Target sensor ID
+    using ResponseType = SensorDataResponse;
 } __attribute__((packed));
 ```
 
@@ -496,7 +513,8 @@ If you want purely asynchronous behavior:
 
 ## Practical Considerations & Best Practices
 
-- **Always** register the same prototypes on both ends (matching IDs, data structures). Make sure to use a common Prototypes.h file. 
+- **Always** register the same prototypes on both ends: matching types, IDs, and data structures. Make sure to use a common `messages.h` (or similar) file.
+- **Never** forget to use the `__attribute__((packed))` keyword on your message structs to avoid padding issues.
 - For reliable request/response, ensure the **response** struct is **registered before** the request struct or use a forward declaration.  
 - **Synchronous** patterns (like `sendMsgAck` or `sendRequest`) block until a response arrives or times out. In a busy system, call them from a context where blocking the current thread is acceptable.  
 - Keep processing loops short inside callbacks to avoid the sender waiting for a response. If you need to perform long operations, consider using an asynchronous pattern with a second message to indicate the outcome of the operation.
