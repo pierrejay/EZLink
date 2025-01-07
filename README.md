@@ -45,10 +45,10 @@ struct ControlMsg {
 #include "SimpleComm.h"
 #include "messages.h"
 
-SimpleComm master(&Serial1);
+SimpleComm master(&UART);
 
 void setup() {
-    Serial1.begin(115200);
+    UART.begin(115200);
     master.begin();
     master.registerRequest<ControlMsg>();
 }
@@ -70,10 +70,10 @@ void loop() {
 #include "SimpleComm.h"
 #include "messages.h"
 
-SimpleComm slave(&Serial1);
+SimpleComm slave(&UART);
 
 void setup() {
-    Serial1.begin(115200);
+    UART.begin(115200);
     slave.begin();
     
     // Register message and handler
