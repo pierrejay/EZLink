@@ -153,42 +153,6 @@ A minimal project layout example is shown below:
 - **Arduino/PlatformIO**: Copy or clone the `lib/SimpleComm/` folder into your project’s `lib/`. Or use the library manager if it’s published.  
 - **Bare-metal**: Include the `.h` files in your build system. Ensure you compile `SimpleComm.h` and `ScrollBuffer.h`.
 
-### Quick Example (Arduino-Style)
-
-**Minimal Master Sketch** (Pseudo-Example):
-
-```cpp
-#include <Arduino.h>
-#include "SimpleComm.h"
-#include "SimpleComm_Proto.h"  // your custom prototypes
-
-SimpleComm master(&Serial1);
-
-void setup() {
-  Serial1.begin(115200);
-  master.begin();
-
-  // Register your message prototypes
-  master.registerRequest<SetLedMsg>();
-}
-
-void loop() {
-  // Send a simple message
-  SetLedMsg msg{.state = 1};
-  auto result = master.sendMsg(msg);
-  // Check success
-  if (result.status != SimpleComm::SUCCESS) {
-    // handle error
-  }
-
-  // Possibly poll for incoming messages if you expect them:
-  auto rxResult = master.poll();
-  // ...
-  delay(1000);
-}
-```
-On the Slave side, you would do something similar, registering SetLedMsg and providing a handler. See full examples under examples/.
-
 ## Defining & Registering Prototypes (Protos)
 
 ### Message Types
@@ -199,11 +163,20 @@ On the Slave side, you would do something similar, registering SetLedMsg and pro
 
 ### Naming & ID Rules
 - Each proto struct declares:  
-  - `static constexpr ProtoType type;`  
+  - `static constexpr ProtoType type;` (see above)
   - `static constexpr uint8_t id;` (must be in **1..127** for requests/messages).  
-- The library automatically uses `id | 0x80` for responses (IDs 128..255).  
-- `id=0` is invalid.  
-- When you define a `RESPONSE`, it **must** have the same `id` as its request. The library handles flipping the MSB.  
+
+- Basic rules:
+  - `id=0` is invalid.  
+  - When you define a `RESPONSE`, it **must** have the same `id` as its request. The library handles linking them together.
+
+- Under the hood:
+  - The library automatically uses `id | 0x80` for responses (IDs 128..255). 
+  - It automatically links requests and responses together.
+  - It can recognize the type of message as well as the request/response relationship.
+  - It reject frames with unrecognized IDs, inconsistent request/response types, as well as responses that don't match any request.
+
+Basically, each message received is sure to be of the type expected by its listener (message/request when polling, ACK/response after sending a request).
 
 ### Example Proto Declarations
 
@@ -239,12 +212,63 @@ struct GetStatusMsg {
 } __attribute__((packed));
 ```
 
+### Message Prototypes Registration
+For the communication to work properly, you must:
+1. Register all messages you want to send with `registerRequest<T>()`
+   - This includes `MESSAGE`, `MESSAGE_ACK`, and `REQUEST` types
+2. Register all responses you expect to receive with `registerResponse<T>()`
+   - Responses must be registered after their corresponding requests
+   - An error will be returned if you try to register a response without its request
+
+#### Order of Registration
+The order of registration matters:
+```cpp
+// Correct order:
+comm.registerRequest<GetStatusMsg>();     // Register the request first
+comm.registerResponse<StatusResponseMsg>(); // Then its response
+
+// Incorrect - will return ERR_REG_INVALID_ID:
+comm.registerResponse<StatusResponseMsg>(); // Can't register response first
+comm.registerRequest<GetStatusMsg>();      // Request must be registered before
+```
+
+#### Registration Requirements by Message Type
+Each message type has specific registration requirements:
+
+| Message Type  | Register With       | Notes                                   |
+|--------------|---------------------|----------------------------------------|
+| MESSAGE      | registerRequest     | One-way messages                       |
+| MESSAGE_ACK  | registerRequest     | Messages expecting echo                |
+| REQUEST      | registerRequest     | Messages expecting specific response   |
+| RESPONSE     | registerResponse    | Must register after its request        |
+
+
 ### Callbacks & Handlers
-After registering a proto, you can attach a callback:
+After registering your messages and responses, you can attach callbacks:
+
 - **For `MESSAGE` or `MESSAGE_ACK`**:  
-  `comm.onReceive<T>([](const T& msg) { /* handle */ });`
-- **For `REQUEST`**:  
-  `comm.onRequest<REQ>([](const REQ& req, typename REQ::ResponseType& resp){ /* fill resp */ });`
+  ```cpp
+  comm.registerRequest<SetLedMsg>();
+  comm.onReceive<SetLedMsg>([](const SetLedMsg& msg) { 
+      /* handle message */ 
+  });
+  ```
+
+- **For `REQUEST/RESPONSE` pairs**:  
+  ```cpp
+  // Register both request and response
+  comm.registerRequest<GetStatusMsg>();
+  comm.registerResponse<StatusResponseMsg>();
+  
+  // Then setup the request handler
+  comm.onRequest<GetStatusMsg>([](
+      const GetStatusMsg& req, 
+      StatusResponseMsg& resp
+  ) { 
+      /* fill response */ 
+  });
+  ```
+
 Callbacks will be automatically called by the library when a matching message is received.
 
 Example:
@@ -338,38 +362,95 @@ Internally, the library:
 - **Synchronous**: For `MESSAGE_ACK` or `REQUEST/RESPONSE`, SimpleComm blocks internally waiting for the correct acknowledgment or response. It also cleans the receive buffer to avoid stale data.  
 - **Asynchronous**: For `MESSAGE` type, no response is expected, so the user can simply send and forget.
 
-### Error Handling & Diagnostics
+## Error Handling & Diagnostics
 
-#### Typical Error Codes
-SimpleComm’s `Status` enum covers both registration errors and runtime failures. Common values include:
-- `SUCCESS`  
-- `NOTHING_TO_DO`  
-- `ERR_ID_ALREADY_REGISTERED` (ID already in use)  
-- `ERR_RCV_INVALID_SOF`, `ERR_RCV_INVALID_LEN`, `ERR_RCV_CRC` (Malformed frames)  
-- `ERR_RCV_TIMEOUT` (No response in expected time)  
-- `ERR_BUSY_RECEIVING` (Attempted to send a message while a frame is partially captured)  
-- `ERR_HW_TX_FAILED` (Transmission hardware buffer full, or TX error)
--...
+### Overview
+SimpleComm provides detailed error reporting through its `Status` enum and `Result` structure. Each operation returns a `Result` containing both a `status` code and the relevant message `id`.
 
-You receive them as a `Result` struct:  
 ```cpp
 struct Result {
-  Status status; // Status or error code (enum above)
-  uint8_t id;    // Message ID (0 if irrelevant)
+    Status status;  // Status or error code
+    uint8_t id;     // Related message ID (0 if not applicable)
 };
 ```
+
 The "==" and "!=" operators are overloaded for `Result` so you can easily check the status without having to extract it from the struct.
 
-#### Debugging
-If you define `SIMPLECOMM_DEBUG` (e.g., in `platformio.ini` or as a compiler flag) and supply a debug `Stream*`, the library will print logs (hex dumps of frames, error messages, etc.).
+### Error Categories
+
+#### Success Codes (0-9)
+| Code | Name | Description | Common Causes | Solution |
+|------|------|-------------|---------------|----------|
+| 0 | `SUCCESS` | Operation completed successfully | N/A | N/A |
+| 1 | `NOTHING_TO_DO` | No data to process | Empty RX buffer, no messages to handle | Normal condition during polling |
+
+#### Registration Errors (10-19)
+| Code | Name | Description | Common Causes | Solution |
+|------|------|-------------|---------------|----------|
+| 10 | `ERR_ID_ALREADY_REGISTERED` | Message ID already in use | Duplicate ID in message definitions | Ensure unique IDs across all messages |
+| 11 | `ERR_NAME_ALREADY_REGISTERED` | Message name already in use | Duplicate message names | Ensure unique names across all messages |
+| 12 | `ERR_TOO_MANY_PROTOS` | Maximum number of prototypes exceeded | Too many registered messages | Increase `MAX_PROTOS` or reduce message types |
+| 13 | `ERR_INVALID_NAME` | Message name is invalid | Null or empty name | Provide a valid name in message definition |
+| 14 | `ERR_REG_INVALID_ID` | Invalid message ID used | ID=0 or ID≥128 for requests | Use IDs between 1-127 for requests |
+| 15 | `ERR_REG_PROTO_MISMATCH` | Protocol type mismatch | Wrong message type registration method | Use correct register method for message type |
+
+#### Communication State Errors (20-29)
+| Code | Name | Description | Common Causes | Solution |
+|------|------|-------------|---------------|----------|
+| 20 | `ERR_BUSY_RECEIVING` | Frame capture in progress | Attempting to send while receiving | Wait and retry, or call cleanupRxBuffer() |
+
+#### Reception Errors (30-39)
+| Code | Name | Description | Common Causes | Solution |
+|------|------|-------------|---------------|----------|
+| 31 | `ERR_RCV_INVALID_ID` | Received unknown message ID | Message not registered, corrupted frame | Register message, check connection |
+| 32 | `ERR_RCV_INVALID_SOF` | Invalid start of frame | Noise, desynchronization | Will auto-recover on next valid frame |
+| 33 | `ERR_RCV_INVALID_LEN` | Invalid frame length | Corrupted frame, noise | Will auto-recover on next valid frame |
+| 34 | `ERR_RCV_PROTO_MISMATCH` | Message type mismatch | Wrong message type received | Check message definitions match |
+| 35 | `ERR_RCV_ACK_MISMATCH` | Wrong acknowledgment | Corrupted response, wrong echo | Check connection, retry if needed |
+| 36 | `ERR_RCV_RESP_MISMATCH` | Wrong response type | Response size mismatch | Check message definitions match |
+| 37 | `ERR_RCV_CRC` | CRC check failed | Corrupted frame, noise | Will auto-recover on next valid frame |
+| 38 | `ERR_RCV_UNEXPECTED_RESPONSE` | Unsolicited response | Late response, protocol error | Check timing, clean buffers |
+| 39 | `ERR_RCV_TIMEOUT` | Response timeout | No response received | Check connection, increase timeout |
+
+#### Transmission Errors (40-49)
+| Code | Name | Description | Common Causes | Solution |
+|------|------|-------------|---------------|----------|
+| 41 | `ERR_SND_INVALID_ID` | Invalid message ID | Message not registered | Register message before sending |
+| 42 | `ERR_SND_EMPTY_DATA` | No data to send | Null pointer, zero length | Check message content |
+| 43 | `ERR_SND_PROTO_MISMATCH` | Protocol type mismatch | Wrong message type for operation | Use correct send method |
+
+#### Hardware Errors (50-59)
+| Code | Name | Description | Common Causes | Solution |
+|------|------|-------------|---------------|----------|
+| 50 | `ERR_HW_FLOOD` | Hardware buffer overflow | Too much incoming data | Increase polling frequency |
+| 51 | `ERR_HW_TX_FAILED` | TX hardware failure | Buffer full, hardware error | Check hardware, retry |
+
+### Basic Error Handling Example
+```cpp
+auto result = comm.sendMsg(msg);
+if (result != SimpleComm::SUCCESS) {
+    // Handle error
+    handleError(result.status, result.id);
+}
+```
+
+### Debug Support
+Enable debug output to get detailed error information with the `SIMPLECOMM_DEBUG` flag
 
 ```cpp
 #define SIMPLECOMM_DEBUG
-#define SIMPLECOMM_DEBUG_TAG "DBG"
-...
-SimpleComm comm(&Serial1, 500, &Serial, "MASTER_INSTANCE");
+#define SIMPLECOMM_DEBUG_TAG "APP"
+
+SimpleComm comm(&Serial1, 500, &Serial);  // Use Serial for debug output
 ```
-This makes debugging especially easier on the Arduino framework, where you can easily attach a custom logger or Serial port to the debug stream.
+
+The debug output to a `Stream` will provide:
+- Hex dumps of frames with errors
+- Error descriptions and message IDs
+- Frame analysis (SOF, LEN, ID values)
+- State transitions
+
+This makes debugging very easy on the Arduino framework, where you can easily attach a custom logger or Serial port to the debug stream.
 
 ## Advanced Usage
 
