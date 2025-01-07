@@ -268,7 +268,7 @@ After registering your messages and responses, you can attach callbacks:
   ```cpp
   comm.registerRequest<SetLedMsg>();
   comm.onReceive<SetLedMsg>([](const SetLedMsg& msg) { 
-      /* handle message */ 
+      /* handle message received */ 
   });
   ```
 
@@ -283,7 +283,7 @@ After registering your messages and responses, you can attach callbacks:
       const GetStatusMsg& req, 
       StatusResponseMsg& resp
   ) { 
-      /* fill response */ 
+      /* handle request & fill response */ 
   });
   ```
 
@@ -296,8 +296,6 @@ slave.onReceive<SetLedMsg>([](const SetLedMsg& msg) {
     digitalWrite(LED_BUILTIN, msg.state); 
 });
 ```
-
----
 
 ## Sending & Receiving Messages
 
@@ -353,14 +351,13 @@ else {
 SimpleComm implements a simple **frame-based** protocol over a raw byte stream:
 - Each frame starts with a **Start of Frame (SOF) byte** `0xAA`.  
 - Followed by **length**, **message identifier (ID)**, the **payload**, and **CRC16**.  
-- 
 ```
 Frame Format (total size = PAYLOAD_SIZE + 5 bytes overhead)
 
 +--------+--------+--------+----- - - - - ------+---------+
 |  SOF   |  LEN   |   ID   |      PAYLOAD       |  CRC16  |
 +--------+--------+--------+----- - - - - ------+---------+
-  0xAA      N+5     1-127          N bytes        2 bytes
+  0xAA      N+5     1-127         N bytes         2 bytes
 
 Notes:
 - Default PAYLOAD: Maximum 27 bytes (MAX_FRAME_SIZE[32] - FRAME_OVERHEAD[5])
@@ -403,6 +400,22 @@ This way, you control how bytes are sent/received. This is especially useful in 
 ### Synchronous vs. Asynchronous
 - **Synchronous**: For `MESSAGE_ACK` or `REQUEST/RESPONSE`, SimpleComm blocks internally waiting for the correct acknowledgment or response. It also cleans the receive buffer to avoid stale data.  
 - **Asynchronous**: For `MESSAGE` type, no response is expected, so the user can simply send and forget.
+
+If you want purely asynchronous behavior:
+- Use only `MESSAGE` types or treat each exchange as unidirectional.  
+- You can call `comm.poll()` periodically or within a specific task/thread to process inbound frames.  
+- For concurrency, note that SimpleComm is **not** inherently thread-safe. If multiple threads call `sendMsg()` concurrently, you must protect them externally.
+
+### Buffer Management & Large Frames
+- By default, `MAX_FRAME_SIZE` is set to `32`. This limits the maximum payload. You can adjust it in `SimpleCommDfs` if needed.  
+- The "scroll buffer" approach implemented in the library ensures partial frames or garbage are eventually discarded without losing any valid subsequent frames. 
+- Several error cases have been thought of and handled, such as truncated frame, invalid length, invalid SOF, SOF present in data, etc. See unit tests for more details.
+- TLDR: as long as you continuously call `poll()` on the receiver side, the message processing pipeline will jump from one frame to the next and end up synchronizing with the next valid frame even if there's garbage in-between.
+
+### CRC Validation & Protocol Robustness
+- Every frame includes a 2-byte CRC16.  
+- The library discards frames with invalid CRC, tries to find the next valid SOF in the buffer, and continues.  
+- If you have extremely noisy lines, consider adding re-transmissions or switching to `MESSAGE_ACK` or `REQUEST/RESPONSE` flows for guaranteed data integrity.
 
 ## Error Handling & Diagnostics
 
@@ -493,23 +506,6 @@ The debug output to a `Stream` will provide:
 - State transitions
 
 This makes debugging very easy on the Arduino framework, where you can easily attach a custom logger or Serial port to the debug stream.
-
-### Asynchronous Handling
-If you want purely asynchronous behavior:
-- Use only `MESSAGE` types or treat each exchange as unidirectional.  
-- You can call `comm.poll()` periodically or within a specific task/thread to process inbound frames.  
-- For concurrency, note that SimpleComm is **not** inherently thread-safe. If multiple threads call `sendMsg()` concurrently, you must protect them externally.
-
-### Buffer Management & Large Frames
-- By default, `MAX_FRAME_SIZE` is set to `32`. This limits the maximum payload. You can adjust it in `SimpleCommDfs` if needed.  
-- The "scroll buffer" approach implemented in the library ensures partial frames or garbage are eventually discarded without losing any valid subsequent frames. 
-- Several error cases have been thought of and handled, such as truncated frame, invalid length, invalid SOF, SOF present in data, etc. See unit tests for more details.
-- TLDR: as long as you continuously call `poll()` on the receiver side, the message processing pipeline will jump from one frame to the next and end up synchronizing with the next valid frame even if there's garbage in-between.
-
-### CRC Validation & Protocol Robustness
-- Every frame includes a 2-byte CRC16.  
-- The library discards frames with invalid CRC, tries to find the next valid SOF in the buffer, and continues.  
-- If you have extremely noisy lines, consider adding re-transmissions or switching to `MESSAGE_ACK` or `REQUEST/RESPONSE` flows for guaranteed data integrity.
 
 ## Practical Considerations & Best Practices
 
