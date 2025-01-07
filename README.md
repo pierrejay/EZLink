@@ -440,11 +440,9 @@ The "==" and "!=" operators are overloaded for `Result` so you can easily check 
 | Code | Name | Description | Common Causes | Solution |
 |------|------|-------------|---------------|----------|
 | 10 | `ERR_ID_ALREADY_REGISTERED` | Message ID already in use | Duplicate ID in message definitions | Ensure unique IDs across all messages |
-| 11 | `ERR_NAME_ALREADY_REGISTERED` | Message name already in use | Duplicate message names | Ensure unique names across all messages |
-| 12 | `ERR_TOO_MANY_PROTOS` | Maximum number of prototypes exceeded | Too many registered messages | Increase `MAX_PROTOS` or reduce message types |
-| 13 | `ERR_INVALID_NAME` | Message name is invalid | Null or empty name | Provide a valid name in message definition |
-| 14 | `ERR_REG_INVALID_ID` | Invalid message ID used | ID=0 or ID≥128 for requests | Use IDs between 1-127 for requests |
-| 15 | `ERR_REG_PROTO_MISMATCH` | Protocol type mismatch | Wrong message type registration method | Use correct register method for message type |
+| 11 | `ERR_TOO_MANY_PROTOS` | Maximum number of prototypes exceeded | Too many registered messages | Increase `MAX_PROTOS` or reduce message types |
+| 12 | `ERR_REG_INVALID_ID` | Invalid message ID used | ID=0 or ID≥128 for requests | Use IDs between 1-127 for requests |
+| 13 | `ERR_REG_PROTO_MISMATCH` | Protocol type mismatch | Wrong message type registration method | Use correct register method for message type |
 
 #### Communication State Errors (20-29)
 | Code | Name | Description | Common Causes | Solution |

@@ -130,11 +130,9 @@ public:
         NOTHING_TO_DO = 1,
         // RegisterProto errors
         ERR_ID_ALREADY_REGISTERED = 10,     // ID already registered
-        ERR_NAME_ALREADY_REGISTERED = 11,   // Name already registered
-        ERR_TOO_MANY_PROTOS = 12,           // Too many protos registered
-        ERR_INVALID_NAME = 13,              // Name is null or empty
-        ERR_REG_INVALID_ID = 14,            // ID not registered
-        ERR_REG_PROTO_MISMATCH = 15,        // Inconsistency between expected and registered proto
+        ERR_TOO_MANY_PROTOS = 11,           // Too many protos registered
+        ERR_REG_INVALID_ID = 12,            // ID not registered
+        ERR_REG_PROTO_MISMATCH = 13,        // Inconsistency between expected and registered proto
         // Poll & sendMsg errors
         ERR_BUSY_RECEIVING = 20,            // Frame capture pending, we must wait for the end of the frame to send a new message
         // RX errors
