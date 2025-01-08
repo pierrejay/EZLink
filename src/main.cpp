@@ -1,6 +1,6 @@
 #include <Arduino.h>
-#include "SimpleComm.h"
-#include "SimpleComm_Proto.h"
+#include "EZLink.h"
+#include "EZLink_Proto.h"
 
 // Communication pins
 #define UART1_RX D5
@@ -139,12 +139,12 @@ public:
 ThreadSafeLogStream threadSafeLog;
 
 // Communication instances
-#ifdef SIMPLECOMM_DEBUG
-SimpleComm master(&UART1, SimpleCommDfs::DEFAULT_RESPONSE_TIMEOUT_MS, &threadSafeLog, "MASTER");
-SimpleComm slave(&UART2, SimpleCommDfs::DEFAULT_RESPONSE_TIMEOUT_MS, &threadSafeLog, "SLAVE");
+#ifdef EZLINK_DEBUG
+EZLink master(&UART1, EZLinkDfs::DEFAULT_RESPONSE_TIMEOUT_MS, &threadSafeLog, "MASTER");
+EZLink slave(&UART2, EZLinkDfs::DEFAULT_RESPONSE_TIMEOUT_MS, &threadSafeLog, "SLAVE");
 #else
-SimpleComm master(&UART1, SimpleCommDfs::DEFAULT_RESPONSE_TIMEOUT_MS);
-SimpleComm slave(&UART2, SimpleCommDfs::DEFAULT_RESPONSE_TIMEOUT_MS);
+EZLink master(&UART1, EZLinkDfs::DEFAULT_RESPONSE_TIMEOUT_MS);
+EZLink slave(&UART2, EZLinkDfs::DEFAULT_RESPONSE_TIMEOUT_MS);
 #endif
 
 // Test state
@@ -218,7 +218,7 @@ void masterTask(void* parameter) {
                 
                 testInProgress = true;
                 auto result = master.sendMsg(msg);
-                if(result != SimpleComm::SUCCESS) {
+                if(result != EZLink::SUCCESS) {
                     logf("MASTER: Erreur envoi LED, code=%d", result.status);
                     txRxStats.masterErrors.txErrors++;
                 } else {
@@ -242,19 +242,19 @@ void masterTask(void* parameter) {
                 unsigned long responseTime = millis() - startTime;  // Calculate response time
                 
                 int errorCode = (int)result.status;
-                if(result == SimpleComm::ERR_RCV_TIMEOUT) {
+                if(result == EZLink::ERR_RCV_TIMEOUT) {
                     log("MASTER: Timeout waiting for ACK");
                     txRxStats.masterErrors.rxErrors++;
                 }
-                else if (errorCode > SimpleComm::ERR_SND_MIN && errorCode < SimpleComm::ERR_SND_MAX) {
+                else if (errorCode > EZLink::ERR_SND_MIN && errorCode < EZLink::ERR_SND_MAX) {
                     logf("MASTER: TX error, code=%d", errorCode);
                     txRxStats.masterErrors.txErrors++;
                 }
-                else if (errorCode > SimpleComm::ERR_RCV_MIN && errorCode < SimpleComm::ERR_RCV_MAX) {
+                else if (errorCode > EZLink::ERR_RCV_MIN && errorCode < EZLink::ERR_RCV_MAX) {
                     logf("MASTER: RX error, code=%d", errorCode);
                     txRxStats.masterErrors.rxErrors++;
                 }
-                else if(result != SimpleComm::SUCCESS) {
+                else if(result != EZLink::SUCCESS) {
                     logf("MASTER: TX/RX error, code=%d", errorCode);
                     txRxStats.masterErrors.txErrors++;
                 } else {
@@ -281,19 +281,19 @@ void masterTask(void* parameter) {
                 unsigned long responseTime = millis() - startTime;  // Calculate response time
                 
                 int errorCode = (int)result.status;
-                if(result == SimpleComm::ERR_RCV_TIMEOUT) {
+                if(result == EZLink::ERR_RCV_TIMEOUT) {
                     log("MASTER: Timeout waiting for response");
                     txRxStats.masterErrors.rxErrors++;
                 }
-                else if (errorCode > SimpleComm::ERR_SND_MIN && errorCode < SimpleComm::ERR_SND_MAX) {
+                else if (errorCode > EZLink::ERR_SND_MIN && errorCode < EZLink::ERR_SND_MAX) {
                     logf("MASTER: TX error, code=%d", errorCode);
                     txRxStats.masterErrors.txErrors++;
                 }
-                else if (errorCode > SimpleComm::ERR_RCV_MIN && errorCode < SimpleComm::ERR_RCV_MAX) {
+                else if (errorCode > EZLink::ERR_RCV_MIN && errorCode < EZLink::ERR_RCV_MAX) {
                     logf("MASTER: RX error, code=%d", errorCode);
                     txRxStats.masterErrors.rxErrors++;
                 }
-                else if(result != SimpleComm::SUCCESS) {
+                else if(result != EZLink::SUCCESS) {
                     logf("MASTER: TX/RX error, code=%d", errorCode);
                     txRxStats.masterErrors.txErrors++;
                 } else {
@@ -321,17 +321,17 @@ void masterTask(void* parameter) {
 void slaveTask(void* parameter) {
     while(true) {
         auto result = slave.poll();
-        if(result == SimpleComm::SUCCESS) {
+        if(result == EZLink::SUCCESS) {
             // At this stage, the message is already processed and the response already sent!
             vTaskDelay(1);  // This delay does not impact the response time
         }
-        else if(result != SimpleComm::NOTHING_TO_DO) {
+        else if(result != EZLink::NOTHING_TO_DO) {
             int errorCode = (int)result.status;
-            if (errorCode > SimpleComm::ERR_SND_MIN && errorCode < SimpleComm::ERR_SND_MAX) {
+            if (errorCode > EZLink::ERR_SND_MIN && errorCode < EZLink::ERR_SND_MAX) {
                 logf("SLAVE: TX error, code=%d", errorCode);
                 txRxStats.slaveErrors.txErrors++;
             }
-            else if (errorCode > SimpleComm::ERR_RCV_MIN && errorCode < SimpleComm::ERR_RCV_MAX) {
+            else if (errorCode > EZLink::ERR_RCV_MIN && errorCode < EZLink::ERR_RCV_MAX) {
                 logf("SLAVE: RX error, code=%d", errorCode);
                 txRxStats.slaveErrors.rxErrors++;
             }

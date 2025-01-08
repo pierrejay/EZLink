@@ -1,13 +1,13 @@
 #include <unity.h>
 #include <Arduino.h>
-#include "SimpleComm.h"
-#include "SimpleComm_Proto.h"
+#include "EZLink.h"
+#include "EZLink_Proto.h"
 
 // Test messages
 struct BorderlineMsg {
     static constexpr ProtoType type = ProtoType::MESSAGE;
     static constexpr uint8_t id = 10;
-    uint8_t data[SimpleCommDfs::MAX_FRAME_SIZE - SimpleCommDfs::FRAME_OVERHEAD];
+    uint8_t data[EZLinkDfs::MAX_FRAME_SIZE - EZLinkDfs::FRAME_OVERHEAD];
 } __attribute__((packed));
 
 struct DuplicateNameMsg {
@@ -93,12 +93,12 @@ private:
         
         if (lastMessageID == SetPwmMsg::id) {
             // Trouver la taille du message SetPwmMsg
-            size_t msgSize = sizeof(SetPwmMsg) + SimpleCommDfs::FRAME_OVERHEAD;
+            size_t msgSize = sizeof(SetPwmMsg) + EZLinkDfs::FRAME_OVERHEAD;
             
             // Trouver l'offset du message SetPwmMsg dans le buffer
             size_t offset = 0;
             while (offset < txCount) {
-                if (txBuffer[offset] == SimpleCommDfs::START_OF_FRAME && 
+                if (txBuffer[offset] == EZLinkDfs::START_OF_FRAME && 
                     offset + 2 < txCount && 
                     txBuffer[offset + 2] == SetPwmMsg::id) {
                     break;
@@ -117,7 +117,7 @@ private:
             printf("\n");
             
             // 2. Mettre le bon ID
-            autoResponseBuffer[2] = SetPwmMsg::id | SimpleCommDfs::ID_RESPONSE_BIT;
+            autoResponseBuffer[2] = SetPwmMsg::id | EZLinkDfs::ID_RESPONSE_BIT;
             printf("MOCK: Modified message (before CRC):");
             for(size_t i = 0; i < msgSize-1; i++) {
                 printf(" %02X", autoResponseBuffer[i]);
@@ -125,7 +125,7 @@ private:
             printf("\n");
             
             // 3. Calculer le CRC sur le buffer modifié
-            uint16_t crc = SimpleComm::calculateCRC16(autoResponseBuffer, msgSize-2);
+            uint16_t crc = EZLink::calculateCRC16(autoResponseBuffer, msgSize-2);
             autoResponseBuffer[msgSize-2] = (uint8_t)(crc >> 8);    // MSB
             autoResponseBuffer[msgSize-1] = (uint8_t)(crc & 0xFF);  // LSB
             
@@ -140,19 +140,19 @@ private:
             autoResponseSize = msgSize;
         }
         else if (lastMessageID == GetStatusMsg::id) {
-            // Pour REQUEST/RESPONSE, on construit une réponse avec ID | SimpleCommDfs::ID_RESPONSE_BIT
+            // Pour REQUEST/RESPONSE, on construit une réponse avec ID | EZLinkDfs::ID_RESPONSE_BIT
             StatusResponseMsg resp{.state = 1, .uptime = 1000};
             
             // Build the response frame
-            autoResponseBuffer[0] = SimpleCommDfs::START_OF_FRAME;
-            autoResponseBuffer[1] = sizeof(StatusResponseMsg) + SimpleCommDfs::FRAME_OVERHEAD;
-            autoResponseBuffer[2] = StatusResponseMsg::id | SimpleCommDfs::ID_RESPONSE_BIT;  // ID de réponse
+            autoResponseBuffer[0] = EZLinkDfs::START_OF_FRAME;
+            autoResponseBuffer[1] = sizeof(StatusResponseMsg) + EZLinkDfs::FRAME_OVERHEAD;
+            autoResponseBuffer[2] = StatusResponseMsg::id | EZLinkDfs::ID_RESPONSE_BIT;  // ID de réponse
             memcpy(&autoResponseBuffer[3], &resp, sizeof(StatusResponseMsg));
-            uint16_t crc = SimpleComm::calculateCRC16(autoResponseBuffer, sizeof(StatusResponseMsg) + SimpleCommDfs::FRAME_OVERHEAD - 2);
-            autoResponseBuffer[sizeof(StatusResponseMsg) + SimpleCommDfs::FRAME_OVERHEAD - 2] = (uint8_t)(crc >> 8);    // MSB
-            autoResponseBuffer[sizeof(StatusResponseMsg) + SimpleCommDfs::FRAME_OVERHEAD - 1] = (uint8_t)(crc & 0xFF);  // LSB
+            uint16_t crc = EZLink::calculateCRC16(autoResponseBuffer, sizeof(StatusResponseMsg) + EZLinkDfs::FRAME_OVERHEAD - 2);
+            autoResponseBuffer[sizeof(StatusResponseMsg) + EZLinkDfs::FRAME_OVERHEAD - 2] = (uint8_t)(crc >> 8);    // MSB
+            autoResponseBuffer[sizeof(StatusResponseMsg) + EZLinkDfs::FRAME_OVERHEAD - 1] = (uint8_t)(crc & 0xFF);  // LSB
             
-            autoResponseSize = sizeof(StatusResponseMsg) + SimpleCommDfs::FRAME_OVERHEAD;
+            autoResponseSize = sizeof(StatusResponseMsg) + EZLinkDfs::FRAME_OVERHEAD;
         }
     }
 
@@ -285,21 +285,21 @@ void tearDown(void) {
 void test_register_proto(void) {
     MockSerial serial;
     serial.reset();  // Stockage du mock
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
 
     // Test 1: Normal registration
     auto result = comm.registerRequest<SetLedMsg>();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
 
     // Test 2: Double registration
     result = comm.registerRequest<SetLedMsg>();
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_ID_ALREADY_REGISTERED, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_ID_ALREADY_REGISTERED, result.status);
 }
 
 void test_send_msg(void) {
     MockSerial serial;
     serial.reset();  // Stockage du mock
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     // Register the proto first
     comm.registerRequest<SetLedMsg>();
@@ -307,18 +307,18 @@ void test_send_msg(void) {
     // Normal send test
     SetLedMsg msg{.state = 1};
     auto result = comm.sendMsg(msg);
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     // Send test without proto registered
     SetPwmMsg pwm{.pin = 1, .freq = 1000};
     result = comm.sendMsgAck(pwm);  // Use sendMsgAck for MESSAGE_ACK
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_SND_INVALID_ID, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_SND_INVALID_ID, result.status);
 }
 
 void test_on_receive(void) {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     bool handlerCalled = false;
     
@@ -331,15 +331,15 @@ void test_on_receive(void) {
     
     // Build a valid frame
     uint8_t frame[] = {
-        SimpleCommDfs::START_OF_FRAME,  // SOF
-        sizeof(SetLedMsg) + SimpleCommDfs::FRAME_OVERHEAD,  // LEN
+        EZLinkDfs::START_OF_FRAME,  // SOF
+        sizeof(SetLedMsg) + EZLinkDfs::FRAME_OVERHEAD,  // LEN
         SetLedMsg::id,               // ID
         1,                          // state = 1
         0,                           // CRC (will be calculated below)
         0                           // CRC (will be calculated below)
     };
     
-    uint16_t crc = SimpleComm::calculateCRC16(frame, sizeof(frame)-2);
+    uint16_t crc = EZLink::calculateCRC16(frame, sizeof(frame)-2);
     frame[sizeof(frame)-2] = (uint8_t)(crc >> 8);    // MSB
     frame[sizeof(frame)-1] = (uint8_t)(crc & 0xFF);  // LSB
     
@@ -348,14 +348,14 @@ void test_on_receive(void) {
     
     // Process the frame
     auto result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     TEST_ASSERT_TRUE(handlerCalled);
 }
 
 void test_timeout(void) {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     comm.registerRequest<SetPwmMsg>();
     
@@ -367,25 +367,25 @@ void test_timeout(void) {
     
     // Test 1: Pas de réponse du tout
     auto result = comm.sendMsgAck(msg);
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_TIMEOUT, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_RCV_TIMEOUT, result.status);
     
     // Test 2: Réponse partielle
     uint8_t partialResponse[] = {
-        SimpleCommDfs::START_OF_FRAME,
-        sizeof(SetPwmMsg) + SimpleCommDfs::FRAME_OVERHEAD,
-        SetPwmMsg::id | SimpleCommDfs::ID_RESPONSE_BIT,
+        EZLinkDfs::START_OF_FRAME,
+        sizeof(SetPwmMsg) + EZLinkDfs::FRAME_OVERHEAD,
+        SetPwmMsg::id | EZLinkDfs::ID_RESPONSE_BIT,
         // Manque les données et le CRC
     };
     serial.injectData(partialResponse, sizeof(partialResponse));
     
     result = comm.sendMsgAck(msg);
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_TIMEOUT, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_RCV_TIMEOUT, result.status);
 }
 
 void test_send_msg_with_ack(void) {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     // Register the proto
     comm.registerRequest<SetPwmMsg>();
@@ -393,13 +393,13 @@ void test_send_msg_with_ack(void) {
     // Test with auto-response from mock
     SetPwmMsg msg{.pin = 5, .freq = 1000};
     auto result = comm.sendMsgAck(msg);
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status); // Must succeed because the mock automatically responds
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status); // Must succeed because the mock automatically responds
 }
 
 void test_request_response(void) {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     // Register the protos
     comm.registerRequest<GetStatusMsg>();
@@ -418,7 +418,7 @@ void test_request_response(void) {
     // The response will be automatically generated by the mock
     auto result = comm.sendRequest(req, resp);
     
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     TEST_ASSERT_EQUAL(1, resp.state);
     TEST_ASSERT_EQUAL(1000, resp.uptime);
 }
@@ -426,13 +426,13 @@ void test_request_response(void) {
 void test_error_cases(void) {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     // Test short frame
-    uint8_t shortFrame[] = {SimpleCommDfs::START_OF_FRAME, 2};
+    uint8_t shortFrame[] = {EZLinkDfs::START_OF_FRAME, 2};
     serial.injectData(shortFrame, sizeof(shortFrame));
     auto result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_INVALID_LEN, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_RCV_INVALID_LEN, result.status);
     
     // Reset for the next test
     serial.reset();
@@ -442,38 +442,38 @@ void test_error_cases(void) {
     
     // Test bad CRC
     uint8_t badCrcFrame[] = {
-        SimpleCommDfs::START_OF_FRAME,
-        sizeof(SetLedMsg) + SimpleCommDfs::FRAME_OVERHEAD,
+        EZLinkDfs::START_OF_FRAME,
+        sizeof(SetLedMsg) + EZLinkDfs::FRAME_OVERHEAD,
         SetLedMsg::id,
         1,
         0xFF, 0xFF  // Bad CRC
     };
     serial.injectData(badCrcFrame, sizeof(badCrcFrame));
     result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_CRC, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_RCV_CRC, result.status);
 }
 
 void test_buffer_limits(void) {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     // Test with a message at the limit (must pass)
     auto result = comm.registerRequest<BorderlineMsg>();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     // Test write buffer full
     comm.registerRequest<SetLedMsg>();  // Must register the proto first !
     serial.setAvailableForWrite(2);   // Simulate almost full buffer
     SetLedMsg msg{.state = 1};
     result = comm.sendMsg(msg);
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_HW_TX_FAILED, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_HW_TX_FAILED, result.status);
 }
 
 void test_set_timeout(void) {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     // Test custom timeout
     comm.setResponseTimeout(500);
@@ -486,7 +486,7 @@ void test_set_timeout(void) {
 void test_complex_data(void) {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     ComplexMsg msg = {
         .array = {0xDEADBEEF, 0xCAFEBABE, 0x12345678, 0x87654321},
@@ -498,7 +498,7 @@ void test_complex_data(void) {
     
     // Test send
     auto result = comm.sendMsg(msg);
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     // Check that the data is correctly transmitted
     const uint8_t* txBuffer = serial.getTxBuffer();
@@ -513,46 +513,46 @@ void test_complex_data(void) {
 void test_size_limits(void) {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     // Test message minimal
     auto result = comm.registerRequest<MinimalMsg>();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     // Test with different buffer sizes available
-    serial.setAvailableForWrite(sizeof(MinimalMsg) + SimpleCommDfs::FRAME_OVERHEAD - 1);
+    serial.setAvailableForWrite(sizeof(MinimalMsg) + EZLinkDfs::FRAME_OVERHEAD - 1);
     MinimalMsg msg{.dummy = 42};
     result = comm.sendMsg(msg);
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_HW_TX_FAILED, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_HW_TX_FAILED, result.status);
     
-    serial.setAvailableForWrite(sizeof(MinimalMsg) + SimpleCommDfs::FRAME_OVERHEAD);
+    serial.setAvailableForWrite(sizeof(MinimalMsg) + EZLinkDfs::FRAME_OVERHEAD);
     result = comm.sendMsg(msg);
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
 }
 
 void test_malformed_frames(void) {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     // Must register the proto first !
     comm.registerRequest<SetLedMsg>();
     
     // Frame with wrong length
     uint8_t wrongLenFrame[] = {
-        SimpleCommDfs::START_OF_FRAME,
-        sizeof(SetLedMsg) + SimpleCommDfs::FRAME_OVERHEAD + 1,  // Too long
+        EZLinkDfs::START_OF_FRAME,
+        sizeof(SetLedMsg) + EZLinkDfs::FRAME_OVERHEAD + 1,  // Too long
         SetLedMsg::id,
         1,
         0,    // Données supplémentaires pour atteindre la taille annoncée
         0, 0  // CRC
     };
-    uint16_t crc = SimpleComm::calculateCRC16(wrongLenFrame, sizeof(wrongLenFrame)-2);
+    uint16_t crc = EZLink::calculateCRC16(wrongLenFrame, sizeof(wrongLenFrame)-2);
     wrongLenFrame[sizeof(wrongLenFrame)-2] = (uint8_t)(crc >> 8); // MSB
     wrongLenFrame[sizeof(wrongLenFrame)-1] = (uint8_t)(crc & 0xFF); // LSB
     serial.injectData(wrongLenFrame, sizeof(wrongLenFrame));
     auto result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_PROTO_MISMATCH, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_RCV_PROTO_MISMATCH, result.status);
     
     serial.reset();  // Important to reset between tests !
 }
@@ -560,19 +560,19 @@ void test_malformed_frames(void) {
 void test_stress(void) {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     comm.registerRequest<SetLedMsg>();
     
     // Test 1: Back-to-back frames
     uint8_t frame[] = {
-        SimpleCommDfs::START_OF_FRAME,
-        sizeof(SetLedMsg) + SimpleCommDfs::FRAME_OVERHEAD,
+        EZLinkDfs::START_OF_FRAME,
+        sizeof(SetLedMsg) + EZLinkDfs::FRAME_OVERHEAD,
         SetLedMsg::id,
         1,
         0, 0  // CRC
     };
-    uint16_t crc = SimpleComm::calculateCRC16(frame, sizeof(frame)-2);
+    uint16_t crc = EZLink::calculateCRC16(frame, sizeof(frame)-2);
     frame[sizeof(frame)-2] = (uint8_t)(crc >> 8); // MSB
     frame[sizeof(frame)-1] = (uint8_t)(crc & 0xFF); // LSB
     
@@ -581,14 +581,14 @@ void test_stress(void) {
     serial.injectData(frame, sizeof(frame));
     
     // Both must be processed
-    uint8_t captured[SimpleCommDfs::MAX_FRAME_SIZE];
+    uint8_t captured[EZLinkDfs::MAX_FRAME_SIZE];
     size_t capturedLen;
     
     auto result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     // Test 2: Corrupted data between two frames
     uint8_t garbage[] = {0xFF, 0x00, 0xFF};
@@ -598,25 +598,25 @@ void test_stress(void) {
     
     // First valid frame
     result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     // The garbage should cause an error
     result = comm.poll();
-    TEST_ASSERT_NOT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_NOT_EQUAL(EZLink::SUCCESS, result.status);
     
     // The second frame should pass
     result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     // Test 3: Frame with SOF in the data (must pass !)
     uint8_t frameWithSOF[] = {
-        SimpleCommDfs::START_OF_FRAME,  // SOF initial
-        sizeof(SetLedMsg) + SimpleCommDfs::FRAME_OVERHEAD,
+        EZLinkDfs::START_OF_FRAME,  // SOF initial
+        sizeof(SetLedMsg) + EZLinkDfs::FRAME_OVERHEAD,
         SetLedMsg::id,
-        SimpleCommDfs::START_OF_FRAME,  // SOF in the data - perfectly valid !
+        EZLinkDfs::START_OF_FRAME,  // SOF in the data - perfectly valid !
         0, 0  // CRC
     };
-    crc = SimpleComm::calculateCRC16(frameWithSOF, sizeof(frameWithSOF)-2);
+    crc = EZLink::calculateCRC16(frameWithSOF, sizeof(frameWithSOF)-2);
     frameWithSOF[sizeof(frameWithSOF)-2] = (uint8_t)(crc >> 8); // MSB
     frameWithSOF[sizeof(frameWithSOF)-1] = (uint8_t)(crc & 0xFF); // LSB
     
@@ -631,19 +631,19 @@ void test_stress(void) {
     
     // All frames must pass
     result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
 }
 
 void test_mixed_message_types(void) {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     // Register different types of messages
     comm.registerRequest<SetLedMsg>();        // MESSAGE
@@ -659,16 +659,16 @@ void test_mixed_message_types(void) {
     
     printf("\nTesting MESSAGE message...\n");
     auto result = comm.sendMsg(led);        
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     printf("\nTesting MESSAGE_ACK message...\n");
     printf("Original ID: 0x%02X\n", SetPwmMsg::id);
-    printf("Expected response ID: 0x%02X\n", SetPwmMsg::id | SimpleCommDfs::ID_RESPONSE_BIT);
+    printf("Expected response ID: 0x%02X\n", SetPwmMsg::id | EZLinkDfs::ID_RESPONSE_BIT);
     result = comm.sendMsgAck(pwm);         
-    if (result != SimpleComm::SUCCESS) {
+    if (result != EZLink::SUCCESS) {
         printf("Failed with error: %d\n", result.status);
     }
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     // ...
 }
@@ -676,32 +676,32 @@ void test_mixed_message_types(void) {
 void test_response_id_calculation() {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     // Enregistrer la paire request/response
     auto result = comm.registerRequest<TestRequestMsg>();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     result = comm.registerResponse<TestResponseMsg>();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
-    const auto* proto = comm.getProtoStore(TestRequestMsg::id | SimpleCommDfs::ID_RESPONSE_BIT);
+    const auto* proto = comm.getProtoStore(TestRequestMsg::id | EZLinkDfs::ID_RESPONSE_BIT);
     TEST_ASSERT_NOT_NULL(proto);
-    TEST_ASSERT_EQUAL(TestResponseMsg::id | SimpleCommDfs::ID_RESPONSE_BIT, proto->id);
+    TEST_ASSERT_EQUAL(TestResponseMsg::id | EZLinkDfs::ID_RESPONSE_BIT, proto->id);
 }
 
 void test_response_wrong_id() {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     // La requête doit passer
     auto result = comm.registerRequest<TestRequestMsg>();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     // La réponse avec mauvais ID doit être rejetée
     result = comm.registerResponse<WrongResponseMsg>();
-    TEST_ASSERT_NOT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_NOT_EQUAL(EZLink::SUCCESS, result.status);
 }
 
 // Those tests are intentionally commented out because they MUST fail at compilation
@@ -712,37 +712,37 @@ void test_response_wrong_id() {
 // void test_response_registered_as_request() {
 //     MockSerial serial;
 //     serial.reset();
-//     SimpleComm comm(&serial);
+//     EZLink comm(&serial);
 //
 //     // This test MUST fail at compilation because we cannot
 //     // register a RESPONSE as a REQUEST (checked by static_assert)
 //     auto result = comm.registerRequest<TestResponseMsg>();
-//     TEST_ASSERT_NOT_EQUAL(SimpleComm::SUCCESS, result.status);
+//     TEST_ASSERT_NOT_EQUAL(EZLink::SUCCESS, result.status);
 // }
 //
 // void test_request_registered_as_response() {
 //     MockSerial serial;
 //     serial.reset();   
-//     SimpleComm comm(&serial);
+//     EZLink comm(&serial);
 //
 //     // This test MUST fail at compilation because we cannot
 //     // register a REQUEST as a RESPONSE (checked by static_assert)
 //     auto result = comm.registerResponse<TestRequestMsg>();
-//     TEST_ASSERT_NOT_EQUAL(SimpleComm::SUCCESS, result.status);
+//     TEST_ASSERT_NOT_EQUAL(EZLink::SUCCESS, result.status);
 // }
 
 void test_busy_receiving(void) {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     // Enregistrer les protos nécessaires
     comm.registerRequest<SetLedMsg>();  // MESSAGE
     
     // Préparer un message incomplet pour simuler une réception en cours
     uint8_t partialFrame[] = {
-        SimpleCommDfs::START_OF_FRAME,  // SOF
-        sizeof(SetLedMsg) + SimpleCommDfs::FRAME_OVERHEAD,  // LEN
+        EZLinkDfs::START_OF_FRAME,  // SOF
+        sizeof(SetLedMsg) + EZLinkDfs::FRAME_OVERHEAD,  // LEN
         SetLedMsg::id,  // ID
         // On n'injecte pas tout le message pour simuler une réception partielle
     };
@@ -765,13 +765,13 @@ void test_busy_receiving(void) {
     SetLedMsg msg{.state = 1};
     result = comm.sendMsg(msg);  // MESSAGE ne nettoie pas le buffer
     printf("TEST: Send result: status=%d, id=%d\n", result.status, result.id);
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_BUSY_RECEIVING, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_BUSY_RECEIVING, result.status);
 }
 
 void test_request_during_response_wait() {
     MockSerial serial;
     serial.reset();
-    SimpleComm comm(&serial);
+    EZLink comm(&serial);
     
     // Enregistrer les messages
     comm.registerRequest<GetStatusMsg>();
@@ -791,13 +791,13 @@ void test_request_during_response_wait() {
     
     // 2. Pendant qu'on attend la réponse, on reçoit une requête LED
     uint8_t incomingRequest[] = {
-        SimpleCommDfs::START_OF_FRAME,
-        sizeof(SetLedMsg) + SimpleCommDfs::FRAME_OVERHEAD,
+        EZLinkDfs::START_OF_FRAME,
+        sizeof(SetLedMsg) + EZLinkDfs::FRAME_OVERHEAD,
         SetLedMsg::id,
         0x01,  // state = 1
         0, 0   // CRC à calculer
     };
-    uint16_t crc = SimpleComm::calculateCRC16(incomingRequest, sizeof(incomingRequest)-2);
+    uint16_t crc = EZLink::calculateCRC16(incomingRequest, sizeof(incomingRequest)-2);
     incomingRequest[sizeof(incomingRequest)-2] = (uint8_t)(crc >> 8); // MSB
     incomingRequest[sizeof(incomingRequest)-1] = (uint8_t)(crc & 0xFF); // LSB
     
@@ -806,19 +806,19 @@ void test_request_during_response_wait() {
     
     // 3. Le poll() doit traiter la requête LED normalement
     result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     TEST_ASSERT_EQUAL(SetLedMsg::id, result.id);
     
     // 4. Maintenant on reçoit la réponse de status (tardive)
     uint8_t lateResponse[] = {
-        SimpleCommDfs::START_OF_FRAME,
-        sizeof(StatusResponseMsg) + SimpleCommDfs::FRAME_OVERHEAD,
-        StatusResponseMsg::id | SimpleCommDfs::ID_RESPONSE_BIT,
+        EZLinkDfs::START_OF_FRAME,
+        sizeof(StatusResponseMsg) + EZLinkDfs::FRAME_OVERHEAD,
+        StatusResponseMsg::id | EZLinkDfs::ID_RESPONSE_BIT,
         0x01,  // state = 1
         0x00, 0x00, 0x00, 0x00,  // uptime = 0
         0, 0   // CRC à calculer
     };
-    crc = SimpleComm::calculateCRC16(lateResponse, sizeof(lateResponse)-2);
+    crc = EZLink::calculateCRC16(lateResponse, sizeof(lateResponse)-2);
     lateResponse[sizeof(lateResponse)-2] = (uint8_t)(crc >> 8); // MSB
     lateResponse[sizeof(lateResponse)-1] = (uint8_t)(crc & 0xFF); // LSB
     
@@ -827,7 +827,7 @@ void test_request_during_response_wait() {
     
     // 5. Le poll() doit rejeter la réponse tardive
     result = comm.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_UNEXPECTED_RESPONSE, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_RCV_UNEXPECTED_RESPONSE, result.status);
 }
 
 int main(void) {

@@ -1,12 +1,12 @@
-# SimpleComm Documentation
+# EZLink Documentation
 
 > *Lightweight, robust, simple messaging library for secure structured communication between microcontrollers*
 
-This document provides a thorough overview of **SimpleComm**, from its motivations to detailed usage examples, design overview, advanced features, and testing strategies. It is intended for developers who need a dependable solution without excessive overhead or complex toolchains.
+This document provides a thorough overview of **EZLink**, from its motivations to detailed usage examples, design overview, advanced features, and testing strategies. It is intended for developers who need a dependable solution without excessive overhead or complex toolchains.
 
 ## Introduction
 
-**SimpleComm** is a C++ library designed for **lightweight & robust communication** between microcontrollers (typically via UART, but suitable to any transport layer carrying binary data). Its primary goal is to **simplify** the process of exchanging structured binary frames, without requiring you to define your own protocol from scratch or adopt complex serialization frameworks.
+**EZLink** is a C++ library designed for **lightweight & robust communication** between microcontrollers (typically via UART, but suitable to any transport layer carrying binary data). Its primary goal is to **simplify** the process of exchanging structured binary frames, without requiring you to define your own protocol from scratch or adopt complex serialization frameworks.
 
 Key design points:
 - Minimal Flash/RAM footprint (as low as ~2KB code size, optimization WIP): suitable for the most constrained microcontrollers such as STM32F03x series.
@@ -17,16 +17,16 @@ Key design points:
 - **No** code generation toolchain required (unlike Protobuf/Cap’nProto).  
 - Works seamlessly on **Arduino** platforms or via custom TX/RX callbacks on bare-metal/RTOS-based firmware as long as your target supports C++11.
 
-Whether you are building a Master/Slave setup over UART or need robust bidirectional communications, **SimpleComm** aims to keep things **KISS** (Keep It Simple, Stupid) while maximizing runtime safety (CRC checks, well-defined message boundaries, error codes, etc.).
+Whether you are building a Master/Slave setup over UART or need robust bidirectional communications, **EZLink** aims to keep things **KISS** (Keep It Simple, Stupid) while maximizing runtime safety (CRC checks, well-defined message boundaries, error codes, etc.).
 
 Note: the current implementation is fully tested and functional (see below for details), but work is still in progress to improve the software. I am currently focused on further reducing code size. The template approach generates lots of duplicate code, taking up ~500B of flash memory for each additional prototype. Serializing message structures earlier in the process should further reduce the code size down to less than 1KB + ~150B per message prototype.
 
-## SimpleComm Minimal Example
+## EZLink Minimal Example
 
 ### Shared Message Definition (messages.h)
 ```cpp
-#include "SimpleComm.h"
-using ProtoType = SimpleComm::ProtoType;
+#include "EZLink.h"
+using ProtoType = EZLink::ProtoType;
 
 // Simple control message with acknowledgment
 struct ControlMsg {
@@ -41,10 +41,10 @@ struct ControlMsg {
 
 ### Master Code
 ```cpp
-#include "SimpleComm.h"
+#include "EZLink.h"
 #include "messages.h"
 
-SimpleComm master(&UART);
+EZLink master(&UART);
 
 void setup() {
     UART.begin(115200);
@@ -60,7 +60,7 @@ void loop() {
         .flags = 0x01
     };
     auto result = master.sendMsgAck(msg);
-    if (result != SimpleComm::SUCCESS) {
+    if (result != EZLink::SUCCESS) {
         // handle error
     }
     delay(1000);
@@ -69,10 +69,10 @@ void loop() {
 
 ### Slave Code
 ```cpp
-#include "SimpleComm.h"
+#include "EZLink.h"
 #include "messages.h"
 
-SimpleComm slave(&UART);
+EZLink slave(&UART);
 
 void setup() {
     UART.begin(115200);
@@ -106,7 +106,7 @@ That's it! A complete bidirectional communication system in ~50 lines of code.
 - **SerialCommands**: Simple, but often text-based or lacks robust binary framing (no built-in CRC or typed messages).  
 - **TinyFrame**: A similar concept, but still can be less direct if you want strongly typed C++ messages and integrated request/response patterns.
 
-**SimpleComm** stands out by allowing you to:
+**EZLink** stands out by allowing you to:
 - Declare message structures in pure C++ with minimal boilerplate.  
 - Rely on compile-time checks (via templates & `static_assert`s) for correctness.  
 - Have built-in request/response, acknowledgment flows, and detailed error codes.  
@@ -142,10 +142,10 @@ A minimal project layout example is shown below:
 
 ```
 ├── lib/ 
-│ └── SimpleComm/             <- Library files
+│ └── EZLink/             <- Library files
 │     └── src/
 │         ├── ScrollBuffer.h
-│         └── SimpleComm.h 
+│         └── EZLink.h 
 ├── src/ 
 │   └── main.cpp              <- Your application code
 └── include/ 
@@ -155,8 +155,8 @@ A minimal project layout example is shown below:
 
 
 ### Installation
-- **Arduino/PlatformIO**: Copy or clone the `lib/SimpleComm/` folder into your project’s `lib/`. Or use the library manager if it’s published.  
-- **Bare-metal**: Include the `.h` files in your build system. Ensure you compile `SimpleComm.h` and `ScrollBuffer.h`.
+- **Arduino/PlatformIO**: Copy or clone the `lib/EZLink/` folder into your project’s `lib/`. Or use the library manager if it’s published.  
+- **Bare-metal**: Include the `.h` files in your build system. Ensure you compile `EZLink.h` and `ScrollBuffer.h`.
 
 ## Defining & Registering Prototypes (Protos)
 
@@ -186,9 +186,9 @@ Basically, each message received is sure to be of the type expected by its liste
 ### Example Proto Declarations
 
 ```cpp
-#include "SimpleComm.h"
+#include "EZLink.h"
 
-using ProtoType = SimpleComm::ProtoType;
+using ProtoType = EZLink::ProtoType;
 
 // Motor control message (one-way command)
 struct SetMotorMsg {
@@ -302,7 +302,7 @@ slave.onReceive<SetLedMsg>([](const SetLedMsg& msg) {
 ```cpp
 SetLedMsg msg{.state = 1};
 auto result = comm.sendMsg(msg);
-if (result != SimpleComm::SUCCESS) {
+if (result != EZLink::SUCCESS) {
   // handle error
 }
 ```
@@ -312,7 +312,7 @@ if (result != SimpleComm::SUCCESS) {
 ```cpp
 SetPwmMsg pwmMsg{.pin = 5, .freq = 1000};
 auto result = comm.sendMsgAck(pwmMsg); 
-if (result != SimpleComm::SUCCESS) {
+if (result != EZLink::SUCCESS) {
   // handle error, e.g., ERR_RCV_TIMEOUT
 }
 ```
@@ -326,7 +326,7 @@ if (result != SimpleComm::SUCCESS) {
 GetStatusMsg req;
 StatusResponseMsg resp;
 auto result = comm.sendRequest(req, resp);
-if (result == SimpleComm::SUCCESS) {
+if (result == EZLink::SUCCESS) {
   // use resp.state, resp.uptime, ...
 }
 else {
@@ -347,7 +347,7 @@ else {
 ## Architecture & Design Overview
 
 ### Communication Model
-SimpleComm implements a simple **frame-based** protocol over a raw byte stream:
+EZLink implements a simple **frame-based** protocol over a raw byte stream:
 - Each frame starts with a **Start of Frame (SOF) byte** `0xAA`.  
 - Followed by **length**, **message identifier (ID)**, the **payload**, and **CRC16**.  
 ```
@@ -382,31 +382,31 @@ Internally, the library:
 ### Using Custom TX/RX Callbacks
 For non-Arduino environments, instead of passing a `HardwareSerial*`, construct with:
 ```cpp
-SimpleComm::TxCallback txCb = [](const uint8_t* data, size_t len) {
+EZLink::TxCallback txCb = [](const uint8_t* data, size_t len) {
     // Write to your custom UART driver
     return yourCustomUartWrite(data, len);
 };
-SimpleComm::RxCallback rxCb = [](uint8_t* data, size_t maxLen) {
+EZLink::RxCallback rxCb = [](uint8_t* data, size_t maxLen) {
     // Read from your custom UART driver
     return yourCustomUartRead(data, maxLen);
 };
 
-SimpleComm comm(txCb, rxCb);
+EZLink comm(txCb, rxCb);
 comm.begin();
 ```
 This way, you control how bytes are sent/received. This is especially useful in RTOS contexts or when using DMA-based ring buffers.
 
 ### Synchronous vs. Asynchronous
-- **Synchronous**: For `MESSAGE_ACK` or `REQUEST/RESPONSE`, SimpleComm blocks internally waiting for the correct acknowledgment or response. It also cleans the receive buffer to avoid stale data.  
+- **Synchronous**: For `MESSAGE_ACK` or `REQUEST/RESPONSE`, EZLink blocks internally waiting for the correct acknowledgment or response. It also cleans the receive buffer to avoid stale data.  
 - **Asynchronous**: For `MESSAGE` type, no response is expected, so the user can simply send and forget.
 
 If you want purely asynchronous behavior:
 - Use only `MESSAGE` types or treat each exchange as unidirectional.  
 - You can call `comm.poll()` periodically or within a specific task/thread to process inbound frames.  
-- For concurrency, note that SimpleComm is **not** inherently thread-safe. If multiple threads call `sendMsg()` concurrently, you must protect them externally.
+- For concurrency, note that EZLink is **not** inherently thread-safe. If multiple threads call `sendMsg()` concurrently, you must protect them externally.
 
 ### Buffer Management & Large Frames
-- By default, `MAX_FRAME_SIZE` is set to `32`. This limits the maximum payload. You can adjust it in `SimpleCommDfs` if needed.  
+- By default, `MAX_FRAME_SIZE` is set to `32`. This limits the maximum payload. You can adjust it in `EZLinkDfs` if needed.  
 - The "scroll buffer" approach implemented in the library ensures partial frames or garbage are eventually discarded without losing any valid subsequent frames. 
 - Several error cases have been thought of and handled, such as truncated frame, invalid length, invalid SOF, SOF present in data, etc. See unit tests for more details.
 - TLDR: as long as you continuously call `poll()` on the receiver side, the message processing pipeline will jump from one frame to the next and end up synchronizing with the next valid frame even if there's garbage in-between.
@@ -419,7 +419,7 @@ If you want purely asynchronous behavior:
 ### Error Handling & Diagnostics
 
 #### Overview
-SimpleComm provides detailed error reporting through its `Status` enum and `Result` structure. Each operation returns a `Result` containing both a `status` code and the relevant message `id`.
+EZLink provides detailed error reporting through its `Status` enum and `Result` structure. Each operation returns a `Result` containing both a `status` code and the relevant message `id`.
 
 ```cpp
 struct Result {
@@ -478,20 +478,20 @@ The "==" and "!=" operators are overloaded for `Result` so you can easily check 
 #### Basic Error Handling Example
 ```cpp
 auto result = comm.sendMsg(msg);
-if (result != SimpleComm::SUCCESS) {
+if (result != EZLink::SUCCESS) {
     // Handle error
     handleError(result.status, result.id);
 }
 ```
 
 ### Debug Support
-Enable debug output to get detailed error information with the `SIMPLECOMM_DEBUG` flag
+Enable debug output to get detailed error information with the `EZLINK_DEBUG` flag
 
 ```cpp
-#define SIMPLECOMM_DEBUG
-#define SIMPLECOMM_DEBUG_TAG "APP"
+#define EZLINK_DEBUG
+#define EZLINK_DEBUG_TAG "APP"
 
-SimpleComm comm(&Serial1, 500, &Serial);  // Use Serial for debug output
+EZLink comm(&Serial1, 500, &Serial);  // Use Serial for debug output
 ```
 
 The debug output to a `Stream` will provide:
@@ -511,7 +511,7 @@ This makes debugging very easy on the Arduino framework, where you can easily at
 - Keep processing loops short inside callbacks to avoid the sender waiting for a response. If you need to perform long operations, consider using an asynchronous pattern with a second message to indicate the outcome of the operation.
 - If you need fully async interactions, do not rely on the built-in synchronous request/response calls. Instead, use your own logic with unidirectional messages.
 - If you see errors like `ERR_BUSY_RECEIVING`, it means a partial frame capture is ongoing. Wait or poll more frequently to allow the library to finish capturing the frame.  
-- For debugging, enabling `SIMPLECOMM_DEBUG` can help identify framing or registration issues quickly.
+- For debugging, enabling `EZLINK_DEBUG` can help identify framing or registration issues quickly.
 
 ## Testing & Validation
 
@@ -544,17 +544,17 @@ Inside `examples/arduino/`:
 
 ### ESP-IDF Examples
 Under `examples/esp-idf/`:
-- Illustrates using `SimpleComm` in a typical ESP-IDF project, with non-Arduino drivers.
+- Illustrates using `EZLink` in a typical ESP-IDF project, with non-Arduino drivers.
 
 ### Python Examples
 Under `examples/py-master/`:
-- Illustrates using `SimpleComm` in a Python script, with a master sending messages to a slave.
+- Illustrates using `EZLink` in a Python script, with a master sending messages to a slave.
 
 ## License
 This library is released under the [MIT License](./LICENSE) (if applicable). Feel free to use and modify it to suit your needs.
 
 ## Final Notes
-**SimpleComm**’s approach is intentionally **minimalistic**, but it offers enough structure to avoid “reinventing the wheel” each time you need robust UART-based message handling. With compile-time validation, CRC checks, and straightforward message definitions, you can focus on **business logic** rather than protocol plumbing.
+**EZLink**’s approach is intentionally **minimalistic**, but it offers enough structure to avoid “reinventing the wheel” each time you need robust UART-based message handling. With compile-time validation, CRC checks, and straightforward message definitions, you can focus on **business logic** rather than protocol plumbing.
 
 If you encounter issues or have feature requests, please open an issue or PR on the repo! I'll be happy to get feedback and contributions to improve the library.
 

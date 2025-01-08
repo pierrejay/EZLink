@@ -1,11 +1,11 @@
 #pragma once
-#include "SimpleComm.h"
+#include "EZLink.h"
 
-// Allow to use the ProtoType enum without the SimpleComm prefix
-using ProtoType = SimpleComm::ProtoType;
+// Allow to use the ProtoType enum without the EZLink prefix
+using ProtoType = EZLink::ProtoType;
 
 /**
- * Test messages for SimpleComm
+ * Test messages for EZLink
  * 
  * Examples of using the different types of messages :
  * 
