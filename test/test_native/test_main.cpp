@@ -5,33 +5,33 @@
 
 // Test messages
 struct BorderlineMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE;
+    static constexpr MsgType type = MsgType::MESSAGE;
     static constexpr uint8_t id = 10;
     uint8_t data[EZLinkDfs::MAX_FRAME_SIZE - EZLinkDfs::FRAME_OVERHEAD];
 } __attribute__((packed));
 
 struct DuplicateNameMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE;
+    static constexpr MsgType type = MsgType::MESSAGE;
     static constexpr uint8_t id = 20;
     uint8_t value;
 } __attribute__((packed));
 
 // Not used (test blocked at compilation => OK)
 struct NullNameMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE;
+    static constexpr MsgType type = MsgType::MESSAGE;
     static constexpr uint8_t id = 30;
     uint8_t value;
 } __attribute__((packed));
 
 // Not used (test blocked at compilation => OK)
 struct EmptyNameMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE;
+    static constexpr MsgType type = MsgType::MESSAGE;
     static constexpr uint8_t id = 31;
     uint8_t value;
 } __attribute__((packed));
 
 struct ComplexMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE;
+    static constexpr MsgType type = MsgType::MESSAGE;
     static constexpr uint8_t id = 32;
     uint32_t array[4];
     int16_t coordinates[3];
@@ -39,7 +39,7 @@ struct ComplexMsg {
 } __attribute__((packed));
 
 struct MinimalMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE;
+    static constexpr MsgType type = MsgType::MESSAGE;
     static constexpr uint8_t id = 33;
     uint8_t dummy;  // Minimal message of one byte
 } __attribute__((packed));
@@ -48,20 +48,20 @@ struct MinimalMsg {
 struct TestResponseMsg;  // Forward declaration nécessaire car TestRequestMsg y fait référence
 
 struct TestRequestMsg {
-    static constexpr ProtoType type = ProtoType::REQUEST;
+    static constexpr MsgType type = MsgType::REQUEST;
     static constexpr uint8_t id = 42;  // ID arbitraire entre 1-127
     using ResponseType = TestResponseMsg;  // Utilise TestResponseMsg qui doit être déclaré avant
     uint8_t data;
 } __attribute__((packed));
 
 struct TestResponseMsg {
-    static constexpr ProtoType type = ProtoType::RESPONSE;
+    static constexpr MsgType type = MsgType::RESPONSE;
     static constexpr uint8_t id = 42;  // Même ID que la requête
     uint8_t data;
 } __attribute__((packed));
 
 struct WrongResponseMsg {
-    static constexpr ProtoType type = ProtoType::RESPONSE;
+    static constexpr MsgType type = MsgType::RESPONSE;
     static constexpr uint8_t id = 43;  // Different de TestRequestMsg::id !
     uint8_t data;
 } __attribute__((packed));

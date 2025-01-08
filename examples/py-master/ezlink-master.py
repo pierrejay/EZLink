@@ -16,7 +16,7 @@ START_OF_FRAME = 0xAA
 MAX_FRAME_SIZE = 32
 FRAME_OVERHEAD = 5  # SOF + LEN + ID + CRC16
 
-class ProtoType(enum.Enum):
+class MsgType(enum.Enum):
     """Message types supported by EZLink"""
     MESSAGE = 0       # Simple message without response
     MESSAGE_ACK = 1   # Message requiring acknowledgment

@@ -14,9 +14,9 @@ pip install pyserial dataclasses
 ```
 
 ### Quick Start
-Copy the `simplecomm.py` file to your project and import it:
+Copy the `ezlink.py` file to your project and import it:
 ```python
-from simplecomm import EZLink, EZLinkError
+from ezlink import EZLink, EZLinkError
 ```
 
 ## Basic Usage

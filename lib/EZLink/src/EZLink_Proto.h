@@ -1,7 +1,7 @@
 #pragma once
 #include "EZLink.h"
 
-// Allow to use the ProtoType enum without the EZLink prefix
+// Allow to use the MsgType enum without the EZLink prefix
 using MsgType = EZLink::MsgType;
 
 /**
