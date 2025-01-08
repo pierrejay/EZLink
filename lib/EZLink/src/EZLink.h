@@ -1,20 +1,19 @@
 #pragma once
+
+#if defined(ARDUINO)
 #include <Arduino.h>
+#endif
+
 #include <functional>
 #include <type_traits>
 #include "ScrollBuffer.h"
 
-// #define SIMPLECOMM_DEBUG
-// #define SIMPLECOMM_DEBUG_TAG "DBG"
-
-// TODO:
-// 1. Implement no-lock SPSC buffer
-// 2. Decouple communication layer w/ byte input/output ("expert mode")
-// 3. Test with STM32F030
-// Later ?: Support validation of the full message structure (hash ?)
+// Uncomment to enable debug (or define in platformio.ini)
+// #define EZLINK_DEBUG
+// #define EZLINK_DEBUG_TAG "DBG"
 
 /**
- * SimpleComm - Simple communication protocol
+ * EZLink - Simple communication protocol
  * 
  * Message types:
  * - MESSAGE: Simple message without response (ID 1-127)
@@ -90,54 +89,55 @@
  * but does not guarantee thread-safety for message sending operations.
  */
 
-// Constants that must stay out of the class as they
-// cannot be inlined in C++11
-
-namespace SimpleCommDfs {
+// Constants that must stay out of the class as they cannot
+// be inlined in C++11 (use EZLinkDfs:: to access them)
+namespace EZLinkDfs {
 
 // Frame format
 static constexpr size_t MAX_FRAME_SIZE = 32;      // Defines max RX buffer size
 static constexpr uint8_t START_OF_FRAME = 0xAA;   // Start Of Frame marker
 static constexpr size_t FRAME_OVERHEAD = 5;       // SOF + LEN + ID + CRC*2
 // ID constants
-static constexpr uint8_t NULL_FC = 0;             // ID=0 reserved/invalid
+static constexpr uint8_t NULL_ID = 0;             // ID=0 reserved/invalid
 static constexpr uint8_t MAX_PROTOS = 10;         // Maximum number of protos registered overall
-static constexpr uint8_t FC_RESPONSE_BIT = 0x80;  // Bit 7 set for responses
-static constexpr uint8_t FC_MAX_USER = 0x7F;      // Max 127 user-defined ID (1-127)
-// Default timeouts
+static constexpr uint8_t ID_RESPONSE_BIT = 0x80;  // Bit 7 set for responses
+static constexpr uint8_t ID_MAX_USER = 0x7F;      // Max 127 user-defined ID (1-127)
+// Timeouts & protections
 static constexpr uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // Wait max 500ms for a response
+static constexpr size_t RX_CLEANUP_BYTES_LIMIT = 256;          // Limite pour détecter un flood au cleanup
 
-} // namespace SimpleCommDfs
+} // namespace EZLinkDfs
 
-class SimpleComm {
+class EZLink {
     
 public:
 
-    // Proto types
-    enum class ProtoType {
+    using TxCallback = std::function<size_t(const uint8_t*, size_t)>; // Write to external interface
+    using RxCallback = std::function<size_t(uint8_t*, size_t)>;        // Read from external interface
+
+    /* @brief Proto types */
+    enum class MsgType {
         MESSAGE,  // No response expected
         MESSAGE_ACK,     // Echo expected
         REQUEST,          // Expect a specific response
         RESPONSE          // Is a response to a request
     };
 
-    // Result of an operation
+    /* @brief Result of an operation */
     enum Status {
         SUCCESS = 0,
         // Poll result
         NOTHING_TO_DO = 1,
         // RegisterProto errors
-        ERR_FC_ALREADY_REGISTERED = 10,     // ID already registered
-        ERR_NAME_ALREADY_REGISTERED = 11,   // Name already registered
-        ERR_TOO_MANY_PROTOS = 12,           // Too many protos registered
-        ERR_INVALID_NAME = 13,              // Name is null or empty
-        ERR_REG_INVALID_FC = 14,            // ID not registered
-        ERR_REG_PROTO_MISMATCH = 15,        // Inconsistency between expected and registered proto
+        ERR_ID_ALREADY_REGISTERED = 10,     // ID already registered
+        ERR_TOO_MANY_PROTOS = 11,           // Too many protos registered
+        ERR_REG_INVALID_ID = 12,            // ID not registered
+        ERR_REG_PROTO_MISMATCH = 13,        // Inconsistency between expected and registered proto
         // Poll & sendMsg errors
         ERR_BUSY_RECEIVING = 20,            // Frame capture pending, we must wait for the end of the frame to send a new message
         // RX errors
         ERR_RCV_MIN = 30,                   // Dummy error code
-        ERR_RCV_INVALID_FC = 31,            // ID not registered
+        ERR_RCV_INVALID_ID = 31,            // ID not registered
         ERR_RCV_INVALID_SOF = 32,           // Invalid SOF
         ERR_RCV_INVALID_LEN = 33,           // Invalid length
         ERR_RCV_PROTO_MISMATCH = 34,        // Message received but inconsistent with expected proto
@@ -149,14 +149,16 @@ public:
         ERR_RCV_MAX = 40,                   // Dummy error code
         // TX errors
         ERR_SND_MIN = 40,                   // Dummy error code
-        ERR_SND_INVALID_FC = 41,            // ID not registered
+        ERR_SND_INVALID_ID = 41,            // ID not registered
         ERR_SND_EMPTY_DATA = 42,            // Empty data to send
-        ERR_SND_OVERFLOW = 43,              // Buffer too small
-        ERR_SND_PROTO_MISMATCH = 44,        // Inconsistency between expected and sent proto
-        ERR_SND_MAX = 45                    // Dummy error code
+        ERR_SND_PROTO_MISMATCH = 43,        // Inconsistency between expected and sent proto
+        ERR_SND_MAX = 44,                   // Dummy error code
+        // Hardware interface errors
+        ERR_HW_FLOOD = 50,                   // Hardware interface probably flooded
+        ERR_HW_TX_FAILED = 51               // Hardware TX failure
     };
 
-    // Complete result of a reception operation
+    /* @brief Complete result of a reception operation */
     struct Result {
         Status status;
         uint8_t id;  // ID of the processed message (if status == SUCCESS)
@@ -166,52 +168,109 @@ public:
         bool operator!=(Status s) const { return status != s; }
     };
     // Helpers to create results
-    static constexpr Result Error(Status status, uint8_t id = SimpleCommDfs::NULL_FC) { return Result{status, id}; }
-    static constexpr Result Success(uint8_t id) { return Result{SUCCESS, id}; }
-    static constexpr Result NoData() { return Result{NOTHING_TO_DO, SimpleCommDfs::NULL_FC}; }
+    static constexpr Result Error(Status status, uint8_t id = EZLinkDfs::NULL_ID) { return Result{status, id}; }
+    static constexpr Result Success(uint8_t id = EZLinkDfs::NULL_ID) { return Result{SUCCESS, id}; }
+    static constexpr Result NoData() { return Result{NOTHING_TO_DO, EZLinkDfs::NULL_ID}; }
 
-    // Constructor
-    explicit SimpleComm(HardwareSerial* serial 
-                       , uint32_t responseTimeoutMs = SimpleCommDfs::DEFAULT_RESPONSE_TIMEOUT_MS
-                       #ifdef SIMPLECOMM_DEBUG
+    /* @brief Constructor with callbacks (always available) */
+    explicit EZLink(TxCallback tx, 
+                       RxCallback rx,
+                       uint32_t responseTimeoutMs = EZLinkDfs::DEFAULT_RESPONSE_TIMEOUT_MS
+                       #ifdef EZLINK_DEBUG
                        , Stream* debugStream = nullptr
-                       , const char* instanceName = ""  // Nom de l'instance pour les logs
+                       , const char* instanceName = ""
                        #endif
-                       ) 
-        : serial(serial)
-        , responseTimeoutMs(responseTimeoutMs)
-        #ifdef SIMPLECOMM_DEBUG
+                       ): 
+        txCallback(tx),
+        rxCallback(rx),
+        responseTimeoutMs(responseTimeoutMs)
+        #ifdef EZLINK_DEBUG
         , debugStream(debugStream)
         , instanceName(instanceName)
         #endif
-    {}
+        {
+        }
 
-    // Make cleanupRxBuffer public to allow manual cleanup if needed
-    void cleanupRxBuffer() {
+    #if defined(ARDUINO)
+    /* @brief Arduino constructor (wrapper) */
+    explicit EZLink(HardwareSerial* serial,
+                       uint32_t responseTimeoutMs = EZLinkDfs::DEFAULT_RESPONSE_TIMEOUT_MS
+                       #ifdef EZLINK_DEBUG
+                       , Stream* debugStream = nullptr
+                       , const char* instanceName = ""
+                       #endif
+                       ) :
+        responseTimeoutMs(responseTimeoutMs)
+        #ifdef EZLINK_DEBUG
+        , debugStream(debugStream)
+        , instanceName(instanceName)
+        #endif
+        {
+            txCallback = [serial](const uint8_t* data, size_t len) {
+                // Check available space
+                if(len > serial->availableForWrite()) {
+                    return (size_t)0;  // Failure -> ERR_HW_TX_FAILED
+                }
+                size_t written = serial->write(data, len);
+                serial->flush();
+                return written;
+            };
+            rxCallback = [serial](uint8_t* data, size_t maxLen) {
+                size_t n = 0;
+                while (n < maxLen && serial->available()) {
+                    data[n++] = serial->read();
+                }
+                return n;
+            };
+        }
+    #endif
+
+    /* @brief Cleanup the RX buffer
+     * @return Result of the operation */
+    Result cleanupRxBuffer() {
+        uint8_t byte;
+        size_t totalRead = 0;
+        bool remainingData = true;
+
         // Clear the hardware buffer first
-        while (serial->available()) {
-            serial->read();
+        while(totalRead < EZLinkDfs::RX_CLEANUP_BYTES_LIMIT && remainingData) {
+            if(rxCallback(&byte, 1) == 0) {
+                remainingData = false;  // No more data to read
+            } else {
+                totalRead++;
+            }
         }
         // Clear our internal RX buffer
         rxBuffer.clear();
         frameCapturePending = false;
-        
-        #ifdef SIMPLECOMM_DEBUG
-        debugPrint("RX buffer cleaned");
+
+        #ifdef EZLINK_DEBUG
+        if(remainingData) {  // If we exited because of the limit
+            debugPrint("Warning: RX cleanup stopped at limit - probable flood");
+        } else {
+            debugPrint("RX buffer cleaned");
+        }
         #endif
+        
+        return remainingData ? Error(ERR_HW_FLOOD) : Success();
     }
 
-    // Initialize the communication
+    /* @brief Initialize the communication */
     void begin() {
         // Clean any residual data that might be in the hardware buffer
-        cleanupRxBuffer();
+        auto result = cleanupRxBuffer();
         
-        #ifdef SIMPLECOMM_DEBUG
-        debugPrint("Instance initialized");
+        #ifdef EZLINK_DEBUG
+        if (result == SUCCESS) {
+            debugPrint("Instance initialized");
+        }
         #endif
     }
 
-    // Extract data from a message
+    /* @brief Extract data from a message
+     * @param msg: The message to extract data from
+     * @param outData: The buffer to store the extracted data
+     * @param outDataLen: The length of the extracted data */
     template<typename T>
     void extractData(const T& msg, uint8_t* outData, size_t& outDataLen) {
         if (outData) {
@@ -220,113 +279,124 @@ public:
         }
     }
 
-    // Register REQUEST prototype
+    /* @brief Register a REQUEST prototype
+     * @return Result of the operation */
     template<typename T>
     Result registerRequest() {
-        static_assert(T::type == ProtoType::REQUEST || 
-                     T::type == ProtoType::MESSAGE || 
-                     T::type == ProtoType::MESSAGE_ACK,
+        static_assert(T::type == MsgType::REQUEST || 
+                     T::type == MsgType::MESSAGE || 
+                     T::type == MsgType::MESSAGE_ACK,
                      "You tried to register a RESPONSE with registerRequest() - use registerResponse() for RESPONSE types");
-        static_assert(T::id != SimpleCommDfs::NULL_FC, "ID=0 is reserved/invalid");
-        static_assert((T::id & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "Request ID must be <= 127");
-        static_assert(T::name != nullptr, "Message must have a name");
+        static_assert(T::id != EZLinkDfs::NULL_ID, "ID=0 is reserved/invalid");
+        static_assert((T::id & EZLinkDfs::ID_RESPONSE_BIT) == 0, "Request ID must be <= 127");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert(sizeof(T) + SimpleCommDfs::FRAME_OVERHEAD <= SimpleCommDfs::MAX_FRAME_SIZE, "Message too large");
+        static_assert(sizeof(T) + EZLinkDfs::FRAME_OVERHEAD <= EZLinkDfs::MAX_FRAME_SIZE, "Message too large");
         return registerProtoInternal<T>(T::id);
     }
 
-    // Register RESPONSE prototype
+    /* @brief Register a RESPONSE prototype
+     * @return Result of the operation */
     template<typename T>
     Result registerResponse() {
-        static_assert(T::type == ProtoType::RESPONSE, 
+        static_assert(T::type == MsgType::RESPONSE, 
                      "Wrong message type - registerResponse() only works with RESPONSE types");
-        static_assert(T::id != SimpleCommDfs::NULL_FC, "ID=0 is reserved/invalid");
-        static_assert((T::id & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "Response ID must be <= 127");
-        static_assert(T::name != nullptr, "Message must have a name");
+        static_assert(T::id != EZLinkDfs::NULL_ID, "ID=0 is reserved/invalid");
+        static_assert((T::id & EZLinkDfs::ID_RESPONSE_BIT) == 0, "Response ID must be <= 127");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert(sizeof(T) + SimpleCommDfs::FRAME_OVERHEAD <= SimpleCommDfs::MAX_FRAME_SIZE, "Message too large");
+        static_assert(sizeof(T) + EZLinkDfs::FRAME_OVERHEAD <= EZLinkDfs::MAX_FRAME_SIZE, "Message too large");
 
-        // Vérifier qu'une requête avec ce ID est enregistrée
-        ProtoStore* requestProto = findProto(T::id);  // Chercher avec le ID original
+        // Check if a request with this ID is registered
+        ProtoStore* requestProto = findProto(T::id);  // Search with original ID
         if (requestProto == nullptr) {
-            return Error(ERR_REG_INVALID_FC, T::id);  // Pas de requête correspondante
+            return Error(ERR_REG_INVALID_ID, T::id);  // No corresponding request
         }
 
-        // On remplace le ID par son complément (ID | 0x80)
-        return registerProtoInternal<T>(T::id | SimpleCommDfs::FC_RESPONSE_BIT);
+        // Replace the ID by its complement (ID | 0x80)
+        return registerProtoInternal<T>(T::id | EZLinkDfs::ID_RESPONSE_BIT);
     }
 
-    // Handler for MESSAGE and MESSAGE_ACK messages
+    /* @brief Handler for MESSAGE and MESSAGE_ACK messages
+     * @param handler: The handler to call when a message is received
+     * @return Result of the operation */
     template<typename T>
     Result onReceive(std::function<void(const T&)> handler) {
-        static_assert(T::type == ProtoType::MESSAGE || 
-                     T::type == ProtoType::MESSAGE_ACK,
+        static_assert(T::type == MsgType::MESSAGE || 
+                     T::type == MsgType::MESSAGE_ACK,
                      "onReceive only works with MESSAGE or MESSAGE_ACK messages");
         return onMessage<T>(handler);
     }
 
-    // Handler for REQUEST messages with automatic response
+    /* @brief Handler for REQUEST messages with automatic response
+     * @param handler: The handler to call when a message is received
+     * @return Result of the operation */
     template<typename REQ>
     Result onRequest(std::function<void(const REQ&, typename REQ::ResponseType&)> handler) {
-        static_assert(REQ::type == ProtoType::REQUEST, 
+        static_assert(REQ::type == MsgType::REQUEST, 
                      "onRequest only works with REQUEST messages");
-        static_assert(REQ::ResponseType::type == ProtoType::RESPONSE, 
+        static_assert(REQ::ResponseType::type == MsgType::RESPONSE, 
                      "Response type must be RESPONSE");
         
         return onMessage<REQ>([this, handler](const REQ& req) {
             typename REQ::ResponseType resp;
-            // Appeler le handler
+            // Call the handler
             handler(req, resp);
 
-            // Envoyer la réponse automatiquement
+            // Send the response automatically
             Result result = sendMsgInternal(resp, true);
             if (result != SUCCESS) {
-                #ifdef SIMPLECOMM_DEBUG
+                #ifdef EZLINK_DEBUG
                 debugPrintf("Erreur envoi response ID=0x%02X, code=%d", REQ::id, result.status);
                 #endif
             } else {
-                #ifdef SIMPLECOMM_DEBUG
+                #ifdef EZLINK_DEBUG
                 debugPrintf("Response ID=0x%02X envoyee avec succes", REQ::id);
                 #endif
             }
         });
     }
 
-    // Type-safe send for MESSAGE messages
+    /* @brief Type-safe send for MESSAGE messages
+     * @param msg: The message to send
+     * @return Result of the operation */
     template<typename T>
     Result sendMsg(const T& msg) {
-        static_assert(T::type == ProtoType::MESSAGE, "Wrong message type, sendMsg() only works with MESSAGE messages");
+        static_assert(T::type == MsgType::MESSAGE, "Wrong message type, sendMsg() only works with MESSAGE messages");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert((T::id & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "ID must be <= 127");
-        static_assert(T::id != SimpleCommDfs::NULL_FC, "ID must not be NULL (0)");  // Check at compilation
+        static_assert((T::id & EZLinkDfs::ID_RESPONSE_BIT) == 0, "ID must be <= 127");
+        static_assert(T::id != EZLinkDfs::NULL_ID, "ID must not be NULL (0)");  // Check at compilation
         return sendMsgInternal(msg, false);
     }
 
-    // Send message and wait for acknowledgement (same message echoed back)
+    /* @brief Send message and wait for acknowledgement (same message echoed back)
+     * @param msg: The message to send
+     * @return Result of the operation */
     template<typename T>
     Result sendMsgAck(const T& msg) {
-        static_assert(T::type == ProtoType::MESSAGE_ACK, "Wrong message type, sendMsgAck() only works with MESSAGE_ACK messages");
+        static_assert(T::type == MsgType::MESSAGE_ACK, "Wrong message type, sendMsgAck() only works with MESSAGE_ACK messages");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert((T::id & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "ID must be <= 127");
-        static_assert(T::id != SimpleCommDfs::NULL_FC, "ID must not be NULL (0)");  // Check at compilation
+        static_assert((T::id & EZLinkDfs::ID_RESPONSE_BIT) == 0, "ID must be <= 127");
+        static_assert(T::id != EZLinkDfs::NULL_ID, "ID must not be NULL (0)");  // Check at compilation
         
         // Clean the RX buffer before sending
-        cleanupRxBuffer();
+        auto result = cleanupRxBuffer();
+        if (result != SUCCESS) {
+            return result;
+        }
         
         // Send message first
-        Result result = sendMsgInternal(msg, false);
+        result = sendMsgInternal(msg, false);
         if (result != SUCCESS) {
             return Error(result.status, T::id);
         }
         
         // Wait for echo with timeout
-        uint8_t frame[SimpleCommDfs::MAX_FRAME_SIZE];
+        uint8_t frame[EZLinkDfs::MAX_FRAME_SIZE];
         size_t frameLen;
         
         unsigned long startTime = millis();
         while(millis() - startTime < responseTimeoutMs) {
             // We expect a response with a complement of the message ID (ID | 0x80)
-            result = captureFrame(T::id | SimpleCommDfs::FC_RESPONSE_BIT, frame, &frameLen);
+            result = captureFrame(T::id | EZLinkDfs::ID_RESPONSE_BIT, frame, &frameLen);
             if(result == NOTHING_TO_DO) {
                 continue;
             }
@@ -334,12 +404,12 @@ public:
                 return result;
             }
             
-            // Vérifier que la réponse fait la même taille que la requête
-            if(frameLen - SimpleCommDfs::FRAME_OVERHEAD != sizeof(T)) {
+            // Check that the response is the same size as the request
+            if(frameLen - EZLinkDfs::FRAME_OVERHEAD != sizeof(T)) {
                 return Error(ERR_RCV_ACK_MISMATCH);
             }
             
-            // Vérifier que le contenu est identique
+            // Check that the content is identical
             if(memcmp(&frame[3], &msg, sizeof(T)) != 0) {
                 return Error(ERR_RCV_ACK_MISMATCH);
             }
@@ -351,35 +421,41 @@ public:
         return Error(ERR_RCV_TIMEOUT);
     }
 
-    // Send request and wait for specific response type
+    /* @brief Send request and wait for specific response type
+     * @param req: The request to send
+     * @param resp: The response to receive
+     * @return Result of the operation */
     template<typename REQ, typename RESP>
     Result sendRequest(const REQ& req, RESP& resp) {
-        static_assert(REQ::type == ProtoType::REQUEST, "Wrong message type, sendRequest() only works with REQUEST messages");
-        static_assert(RESP::type == ProtoType::RESPONSE, "Response must be a RESPONSE type");
+        static_assert(REQ::type == MsgType::REQUEST, "Wrong message type, sendRequest() only works with REQUEST messages");
+        static_assert(RESP::type == MsgType::RESPONSE, "Response must be a RESPONSE type");
         static_assert(std::is_same<RESP, typename REQ::ResponseType>::value, "Response type doesn't match request's ResponseType");
         static_assert(std::is_standard_layout<REQ>::value, "Request type must be POD/standard-layout");
         static_assert(std::is_standard_layout<RESP>::value, "Response type must be POD/standard-layout");
-        static_assert(REQ::id != SimpleCommDfs::NULL_FC, "ID must not be NULL (0)");
-        static_assert((REQ::id & SimpleCommDfs::FC_RESPONSE_BIT) == 0, "Request ID must be <= 127");
+        static_assert(REQ::id != EZLinkDfs::NULL_ID, "ID must not be NULL (0)");
+        static_assert((REQ::id & EZLinkDfs::ID_RESPONSE_BIT) == 0, "Request ID must be <= 127");
         static_assert(REQ::id == RESP::id, "Response ID must match Request ID"); 
         
         // Clean the RX buffer before sending
-        cleanupRxBuffer();
+        auto result = cleanupRxBuffer();
+        if (result != SUCCESS) {
+            return result;
+        }
         
         // Send request
-        Result result = sendMsgInternal(req);
+        result = sendMsgInternal(req);
         if (result != SUCCESS) {
             return Error(result.status, REQ::id);
         }
         
         // Wait for response with timeout
-        uint8_t frame[SimpleCommDfs::MAX_FRAME_SIZE];
+        uint8_t frame[EZLinkDfs::MAX_FRAME_SIZE];
         size_t frameLen;
         
         unsigned long startTime = millis();
         while(millis() - startTime < responseTimeoutMs) {
             // We expect a response with a complement of the request ID (ID | 0x80)
-            result = captureFrame(RESP::id | SimpleCommDfs::FC_RESPONSE_BIT, frame, &frameLen);  // Attendre le ID avec bit de réponse
+            result = captureFrame(RESP::id | EZLinkDfs::ID_RESPONSE_BIT, frame, &frameLen);  // Wait for the ID with response bit
             if(result == NOTHING_TO_DO) {
                 continue;
             }
@@ -387,12 +463,12 @@ public:
                 return result;
             }
             
-            // Vérifier que la réponse fait la bonne taille
-            if(frameLen - SimpleCommDfs::FRAME_OVERHEAD != sizeof(RESP)) {
+            // Check that the response is the right size
+            if(frameLen - EZLinkDfs::FRAME_OVERHEAD != sizeof(RESP)) {
                 return Error(ERR_RCV_RESP_MISMATCH);
             }
             
-            // Frame capturée, on la copie dans la réponse
+            // Captured frame, copy it into the response
             memcpy(&resp, &frame[3], sizeof(RESP));
             return Success(RESP::id);
         }
@@ -401,51 +477,52 @@ public:
         return Error(ERR_RCV_TIMEOUT);
     }
 
-    // Process received messages with optional frame capture
+    /* @brief Process received messages with optional frame capture
+     * @return Result of the operation */
     Result poll() {
-        uint8_t rxBuffer[SimpleCommDfs::MAX_FRAME_SIZE];  // Buffer local
+        uint8_t rxBuffer[EZLinkDfs::MAX_FRAME_SIZE];  // Local buffer
         size_t frameLen;
 
-        // Tente de capturer une frame dans le buffer local
+        // Try to capture a frame in the local buffer
         Result result = captureFrame(0, rxBuffer, &frameLen);
         
-        // Si la capture n'a pas réussi, on retourne l'erreur obtenue
+        // If capture failed, return the error
         if(result != SUCCESS && result != NOTHING_TO_DO) {
             return result;
         }
         
-        // Si la capture a réussi, vérifier que ce n'est pas une réponse
+        // If capture succeeded, check that it's not a response
         if(result == SUCCESS) {
             
-            // Rejeter les réponses (bit 7 setté)
-            if((result.id & SimpleCommDfs::FC_RESPONSE_BIT) != 0) {
+            // Reject responses (bit 7 set)
+            if((result.id & EZLinkDfs::ID_RESPONSE_BIT) != 0) {
                 return Error(ERR_RCV_UNEXPECTED_RESPONSE, result.id);
             }
 
-            // Trouver le proto et vérifier la taille
+            // Find the proto and check the size
             ProtoStore* proto = findProto(result.id);
             if(proto) {
-                // Vérifier que la taille correspond au proto
-                if(frameLen - SimpleCommDfs::FRAME_OVERHEAD != proto->size) {
+                // Check that the size matches the proto
+                if(frameLen - EZLinkDfs::FRAME_OVERHEAD != proto->size) {
                     return Error(ERR_RCV_PROTO_MISMATCH, result.id);
                 }
                 
-                // Appeler le handler si enregistré
+                // Call the handler if registered
                 if(proto->callback) {
                     proto->callback(&rxBuffer[3]);
                 }
 
-                // Si c'est un message MESSAGE_ACK, envoyer l'ACK automatiquement,
-                // en flippant le ID
-                uint8_t ackId = result.id | SimpleCommDfs::FC_RESPONSE_BIT;
-                if(proto->type == ProtoType::MESSAGE_ACK) {
+                // If it's a MESSAGE_ACK message, send the ACK automatically,
+                // flipping the ID
+                uint8_t ackId = result.id | EZLinkDfs::ID_RESPONSE_BIT;
+                if(proto->type == MsgType::MESSAGE_ACK) {
                     sendFrame(ackId, &rxBuffer[3], proto->size);
                 }
             }
             return result;
         }
         
-        // Si on n'a rien capturé, on retourne NOTHING_TO_DO
+        // If nothing captured, return NOTHING_TO_DO
         return NoData();
     }
 
@@ -459,7 +536,10 @@ public:
         return responseTimeoutMs;
     }
 
-    // Utility function to calculate CRC8
+    /* @brief Utility function to calculate CRC8
+     * @param data: The data to calculate the CRC8 from
+     * @param size: The size of the data
+     * @return The CRC8 value */
     static uint8_t calculateCRC8(const uint8_t* data, size_t size) {
         uint8_t crc = 0;
         for (size_t i = 0; i < size; i++) {
@@ -476,7 +556,10 @@ public:
         return crc;
     }
 
-    // Utility function to calculate CRC16
+    /* @brief Utility function to calculate CRC16
+     * @param data: The data to calculate the CRC16 from
+     * @param size: The size of the data
+     * @return The CRC16 value */
     static uint16_t calculateCRC16(const uint8_t* data, size_t size) {
         uint16_t crc = 0xFFFF;  // Initial value
         for (size_t i = 0; i < size; i++) {
@@ -493,38 +576,43 @@ public:
     }
 
 private:
-    // Structure to store message prototypes
+    /* @brief Structure to store message prototypes */
     struct ProtoStore {
-        ProtoType type = ProtoType::MESSAGE;
+        MsgType type = MsgType::MESSAGE;
         const char* name = nullptr;
-        uint8_t id = SimpleCommDfs::NULL_FC;
+        uint8_t id = EZLinkDfs::NULL_ID;
         size_t size = 0;
         std::function<void(const void*)> callback = nullptr;
     };
 
     // Attributes
-    HardwareSerial* serial;         // Port de communication
-    uint32_t responseTimeoutMs;
-    ProtoStore protos[SimpleCommDfs::MAX_PROTOS];
-    bool frameCapturePending = false;
+    TxCallback txCallback;                          // Callback for sending frames
+    RxCallback rxCallback;                          // Callback for receiving frames
+    uint32_t responseTimeoutMs;                     // Timeout for responses
+    ProtoStore protos[EZLinkDfs::MAX_PROTOS];   // Array of prototypes
+    bool frameCapturePending = false;               // Flag to indicate if a frame is being captured
 
-    #ifdef SIMPLECOMM_DEBUG
-    Stream* debugStream;            // Port de debug (optionnel)
-    const char* instanceName;       // Nom de l'instance pour les logs
+    #ifdef EZLINK_DEBUG
+    Stream* debugStream;            // Debug port (optional)
+    const char* instanceName;       // Instance name for logs
 
-    // Helper pour les logs de debug
+    /* @brief Helper for debug logs
+     * @param msg: The message to log */
     void debugPrint(const char* msg) {
         if (debugStream) {
             debugStream->print("[");
-            debugStream->print(SIMPLECOMM_DEBUG_TAG);
+            debugStream->print(EZLINK_DEBUG_TAG);
             debugStream->print("_");
             debugStream->print(instanceName);
             debugStream->print("]: ");
             debugStream->print(msg);
-            debugStream->print("\n");  // Un seul \n explicite
+            debugStream->print("\n");  // Single \n explicit
         }
     }
     
+    /* @brief Helper for debug logs
+     * @param format: The format string
+     * @param ...: The arguments to format */
     void debugPrintf(const char* format, ...) {
         if (debugStream) {
             char buffer[128];
@@ -533,7 +621,7 @@ private:
             vsnprintf(buffer, sizeof(buffer), format, args);
             va_end(args);
             debugStream->print("[");
-            debugStream->print(SIMPLECOMM_DEBUG_TAG);
+            debugStream->print(EZLINK_DEBUG_TAG);
             debugStream->print("_");
             debugStream->print(instanceName);
             debugStream->print("]: ");
@@ -541,11 +629,14 @@ private:
         }
     }
 
-    // Helper pour les logs de debug
+    /* @brief Helper for debug logs
+     * @param prefix: The prefix to log
+     * @param data: The data to log
+     * @param len: The length of the data */
     void debugHexDump(const char* prefix, const uint8_t* data, size_t len) {
         if (!debugStream) return;
         debugStream->print("[");
-        debugStream->print(SIMPLECOMM_DEBUG_TAG);
+        debugStream->print(EZLINK_DEBUG_TAG);
         debugStream->print("_");
         debugStream->print(instanceName);
         debugStream->print("]: ");
@@ -554,8 +645,8 @@ private:
         debugStream->print(len);
         debugStream->print(" bytes]");
         
-        // Afficher l'analyse rapide si c'est une frame
-        if (len >= SimpleCommDfs::FRAME_OVERHEAD) {
+        // Display quick analysis if it's a frame
+        if (len >= EZLinkDfs::FRAME_OVERHEAD) {
             debugStream->print(" SOF=0x");
             if (data[0] < 0x10) debugStream->print("0");
             debugStream->print(data[0], HEX);
@@ -568,7 +659,7 @@ private:
         
         debugStream->print(" => ");
         
-        // Afficher le hexdump
+        // Display hexdump
         for(size_t i = 0; i < len; i++) {
             if(data[i] < 0x10) debugStream->print("0");
             debugStream->print(data[i], HEX);
@@ -578,24 +669,18 @@ private:
     }
     #endif
 
-    // Register message prototype
+    /* @brief Register message prototype
+     * @param id: The ID of the prototype
+     * @return Result of the operation */
     template<typename T>
     Result registerProtoInternal(uint8_t id) {
         // Proto validation is already done in registerRequest() and registerResponse()
         
-        // Invalid names (nullptr or "") are blocked at compilation
-        if(T::name == nullptr || T::name[0] == '\0') {
-            return Error(ERR_INVALID_NAME, T::id);
-        }
-        
         // Check if already registered (by ID or by name)
-        for(size_t i = 0; i < SimpleCommDfs::MAX_PROTOS; i++) {
-            if(protos[i].id != SimpleCommDfs::NULL_FC) {
+        for(size_t i = 0; i < EZLinkDfs::MAX_PROTOS; i++) {
+            if(protos[i].id != EZLinkDfs::NULL_ID) {
                 if(protos[i].id == id) {  // On compare avec le ID modifié !
-                    return Error(ERR_FC_ALREADY_REGISTERED, T::id);
-                }
-                if(strEqual(protos[i].name, T::name)) {
-                    return Error(ERR_NAME_ALREADY_REGISTERED, T::id);
+                    return Error(ERR_ID_ALREADY_REGISTERED, T::id);
                 }
             }
         }
@@ -607,24 +692,22 @@ private:
         }
         
         // Register the proto
-        slot->id = id;  // Utiliser le ID modifié passé en paramètre
+        slot->id = id;  // Use the modified ID passed as parameter
         slot->type = T::type;
         slot->size = sizeof(T);
-        slot->name = T::name;  // Store the name
         
         return Success(T::id);
     }
 
-    // Check if proto is registered and matches
-    // If outProto is not null, it will be set to the proto found
+    /* @brief Check if proto is registered and matches
+     * @param id: The ID of the prototype
+     * @param outProto: The pointer to the proto found (optional)
+     * @return Result of the operation */
     template<typename T>
     Result checkProto(uint8_t id, ProtoStore** outProto = nullptr) {
         ProtoStore* proto = findProto(id);
         if (proto == nullptr) {
-            return Error(ERR_SND_INVALID_FC, id);
-        }
-        if (!strEqual(proto->name, T::name)) {
-            return Error(ERR_SND_PROTO_MISMATCH, id);
+            return Error(ERR_SND_INVALID_ID, id);
         }
         if(outProto) {
             *outProto = proto;
@@ -632,18 +715,21 @@ private:
         return Success(id);
     }
 
-    // Send message
+    /* @brief Send message
+     * @param msg: The message to send
+     * @param flipId: Whether to flip the ID (for responses)
+     * @return Result of the operation */
     template<typename T>
     Result sendMsgInternal(const T& msg, bool flipId = false) {
 
         // Define ID, flip if needed (for responses)
         uint8_t id = msg.id;
-        if (flipId) id |= SimpleCommDfs::FC_RESPONSE_BIT;
+        if (flipId) id |= EZLinkDfs::ID_RESPONSE_BIT;
 
         // Check if proto is registered and matches
         Result protoCheck = checkProto<T>(id);
         if(protoCheck != SUCCESS) {
-            #ifdef SIMPLECOMM_DEBUG
+            #ifdef EZLINK_DEBUG
             debugPrintf("Erreur validation proto response ID=0x%02X, code=%d", id, protoCheck.status);
             #endif
             return protoCheck;
@@ -653,7 +739,11 @@ private:
         return sendFrame(id, (uint8_t*)&msg, sizeof(T));
     }
 
-    // Send message
+    /* @brief Send message
+     * @param id: The ID of the message
+     * @param data: The data to send
+     * @param dataLen: The length of the data
+     * @return Result of the operation */
     Result sendFrame(uint8_t id, uint8_t* data, size_t dataLen) {
         if (!data || dataLen == 0) {
             return Error(ERR_SND_EMPTY_DATA);
@@ -664,15 +754,12 @@ private:
             return Error(ERR_BUSY_RECEIVING);
         }
         
-        // Check if we have enough space
-        size_t frameSize = dataLen + SimpleCommDfs::FRAME_OVERHEAD; // Only includes non-static fields (data) + overhead
-        if(frameSize > serial->availableForWrite()) {
-            return Error(ERR_SND_OVERFLOW);
-        }
+        // Calculate frame size
+        size_t frameSize = dataLen + EZLinkDfs::FRAME_OVERHEAD; // Only includes non-static fields (data) + overhead
 
         // Prepare frame
-        uint8_t frame[SimpleCommDfs::MAX_FRAME_SIZE];
-        frame[0] = SimpleCommDfs::START_OF_FRAME;
+        uint8_t frame[EZLinkDfs::MAX_FRAME_SIZE];
+        frame[0] = EZLinkDfs::START_OF_FRAME;
         frame[1] = frameSize;
         frame[2] = id;
         memcpy(&frame[3], data, dataLen);
@@ -681,106 +768,109 @@ private:
         frame[frameSize-1] = (uint8_t)(crc & 0xFF);  // LSB
 
         
-        #ifdef SIMPLECOMM_DEBUG
-        // Log la frame envoyée
+        #ifdef EZLINK_DEBUG
+        // Log the sent frame
             debugHexDump("TX frame", frame, frameSize);
         #endif
 
-        // Send frame (now we are sure we have enough space)
-        serial->write(frame, frameSize);
-        serial->flush();
+        // Send frame
+        if(txCallback(frame, frameSize) != frameSize) {
+            return Error(ERR_HW_TX_FAILED);
+        }
 
         return Success(id);
     }
 
-    // "Scrolling" ring buffer for reception
-    ScrollBuffer<uint8_t, SimpleCommDfs::MAX_FRAME_SIZE> rxBuffer;
+    /* @brief "Scrolling" ring buffer for reception */
+    ScrollBuffer<uint8_t, EZLinkDfs::MAX_FRAME_SIZE> rxBuffer;
 
+    /* @brief Capture a frame
+     * @param expectedId: The expected ID of the frame (0 for any)
+     * @param outFrame: The pointer to the frame found (optional)
+     * @param outLen: The pointer to the length of the frame found (optional)
+     * @return Result of the operation */
     Result captureFrame(uint8_t expectedId = 0, uint8_t* outFrame = nullptr, size_t* outLen = nullptr) {
 
-        const uint8_t sof = SimpleCommDfs::START_OF_FRAME;
+        const uint8_t sof = EZLinkDfs::START_OF_FRAME;
 
-        // D'abord on lit tout ce qui est disponible sur le port série
-        while (serial->available() && rxBuffer.size() < SimpleCommDfs::MAX_FRAME_SIZE) {
-            rxBuffer.push(serial->read());
-        }
+        // First read all available on the serial port
+        processRx();
 
-        // Pas assez de données
+        // Not enough data
         if (rxBuffer.size() == 0) {
             return NoData();
         }
 
-        // Si pas de capture en cours, on cherche un SOF valide
+        // If no capture in progress, search for a valid SOF
         if (!frameCapturePending) {
-            // Pas de données
+            // No data
             if (rxBuffer.size() == 0) {
                 return NoData();
             }
             
-            // L'octet courant doit être un SOF
+            // Current byte must be a SOF
             if (rxBuffer.peek(0) != sof) {
-                // Log le SOF invalide
+                // Log invalid SOF
                 uint8_t invalidSof = rxBuffer.peek(0);
-                #ifdef SIMPLECOMM_DEBUG
+                #ifdef EZLINK_DEBUG
                 debugHexDump("RX invalid SOF", &invalidSof, 1);
                 #endif
                 
-                // Sinon on essaye de glisser jusqu'au prochain SOF
+                // Otherwise slide to the next SOF
                 rxBuffer.scrollTo(sof); 
                 return Error(ERR_RCV_INVALID_SOF);
             }
             
-            // On a maintenant un SOF valide, on commence la capture
+            // Now we have a valid SOF, start capture
             frameCapturePending = true;
         }
 
-        // Capture en cours, on doit avoir au moins 2 octets pour lire le LEN
+        // Capture in progress, we must have at least 2 bytes to read the LEN
         if (rxBuffer.size() < 2) {
             return NoData();
         }
 
-        // Vérifier LEN
+        // Check LEN
         uint8_t frameSize = rxBuffer.peek(1);
-        if (frameSize < SimpleCommDfs::FRAME_OVERHEAD || frameSize > SimpleCommDfs::MAX_FRAME_SIZE) {
-            // Log SOF + LEN invalide
-            #ifdef SIMPLECOMM_DEBUG
+        if (frameSize < EZLinkDfs::FRAME_OVERHEAD || frameSize > EZLinkDfs::MAX_FRAME_SIZE) {
+            // Log invalid SOF + LEN
+            #ifdef EZLINK_DEBUG
             uint8_t header[2];
             header[0] = rxBuffer.peek(0);
             header[1] = rxBuffer.peek(1);
             debugHexDump("RX invalid LEN", header, 2);
             #endif
             
-            // Si LEN invalide, on jette le SOF
+            // If invalid LEN, discard SOF
             rxBuffer.dump(1);
-            // On essaye de glisser jusqu'au prochain SOF
+            // Try to slide to the next SOF
             rxBuffer.scrollTo(sof);
             return Error(ERR_RCV_INVALID_LEN);
         }
 
-        // Attendre d'avoir la frame complète
+        // Wait for the full frame
         if (rxBuffer.size() < frameSize) {
             return NoData();
         }
 
-        // On a une frame complète, on la copie pour le CRC
-        uint8_t tempFrame[SimpleCommDfs::MAX_FRAME_SIZE];
+        // We have a full frame, copy it for CRC
+        uint8_t tempFrame[EZLinkDfs::MAX_FRAME_SIZE];
         for (uint8_t i = 0; i < frameSize; i++) {
             tempFrame[i] = rxBuffer.peek(i);
         }
 
-        // Valider CRC en premier avant de vérifier le contenu
+        // Validate CRC first before checking the content
         uint16_t receivedCRC = ((uint16_t)tempFrame[frameSize-2] << 8) | tempFrame[frameSize-1];
         uint16_t calculatedCRC = calculateCRC16(tempFrame, frameSize-2);
         if (receivedCRC != calculatedCRC) {
             frameCapturePending = false;
-            // CRC invalide, peut être une frame tronquée suivie d'une frame valide, 
-            // on jette le SOF et on essaie de glisser jusqu'au prochain.
-            // - Si c'était une frame tronquée, la suivante sera traitée au prochain poll().
-            // - Si ce n'était pas une frame tronquée, on peut tomber sur un SOF présent
-            //   dans les données de la frame invalide, il sera rejeté.
-            // Dans tous les cas, on ne jette aucune frame valide, tant qu'on appelle
-            // régulièrement poll() on finira par tomber sur le SOF d'une frame valide.
-            #ifdef SIMPLECOMM_DEBUG
+            // Invalid CRC, may be a truncated frame followed by a valid frame,
+            // discard SOF and slide to the next.
+            // - If it was a truncated frame, the next one will be processed at the next poll().
+            // - If it was not a truncated frame, we may find a SOF present in the invalid frame data, it will be rejected.
+            // In all cases, no valid frame is discarded, as long as we regularly call
+            // poll() we will eventually find the SOF of a valid frame.
+            #ifdef EZLINK_DEBUG
             debugHexDump("RX invalid CRC", tempFrame, frameSize);
             #endif
             rxBuffer.dump(1);
@@ -788,37 +878,39 @@ private:
             return Error(ERR_RCV_CRC);
         }
 
-        // Le CRC est valide, on peut maintenant vérifier le ID si nécessaire
+        // CRC is valid, we can now check the ID if needed
         uint8_t id = rxBuffer.peek(2);
         if (expectedId > 0 && id != expectedId) {
             frameCapturePending = false;
-            // ID invalide, on jette la frame entière et on essaie de glisser jusqu'au prochain SOF
-            #ifdef SIMPLECOMM_DEBUG
+            // Invalid ID, discard the entire frame and slide to the next SOF
+            #ifdef EZLINK_DEBUG
             debugHexDump("RX invalid ID", tempFrame, frameSize);
             #endif
             rxBuffer.dump(frameSize);
             rxBuffer.scrollTo(sof);
-            return Error(ERR_RCV_INVALID_FC, id);
+            return Error(ERR_RCV_INVALID_ID, id);
         }
 
-        #ifdef SIMPLECOMM_DEBUG
+        #ifdef EZLINK_DEBUG
         debugHexDump("RX valid frame", tempFrame, frameSize);
         #endif
 
-        // Frame valide !
+        // Valid frame !
         if (outFrame && outLen) {
             memcpy(outFrame, tempFrame, frameSize);
             *outLen = frameSize;
         }
 
-        // On consomme la frame
+        // Consume the frame
         rxBuffer.dump(frameSize);
         frameCapturePending = false;
 
         return Success(id);
     }
 
-    // Generic handler (internal usage only)
+    /* @brief Generic handler (internal usage only)
+     * @param handler: The handler to call when a message is received
+     * @return Result of the operation */
     template<typename T>
     Result onMessage(std::function<void(const T&)> handler) {
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
@@ -826,10 +918,7 @@ private:
         
         ProtoStore* proto = findProto(T::id);
         if(proto == nullptr) {
-            return Error(ERR_REG_INVALID_FC, T::id);
-        }
-        if (!strEqual(proto->name, T::name)) {
-            return Error(ERR_REG_PROTO_MISMATCH, T::id);
+            return Error(ERR_REG_INVALID_ID, T::id);
         }
         
         proto->callback = [handler](const void* data) {
@@ -839,9 +928,25 @@ private:
         return Success(T::id);
     }
 
-    // Find a proto by its ID
+    /* @brief Process incoming data */
+    void processRx() {
+        // Read only if there is space in the buffer
+        size_t available = EZLinkDfs::MAX_FRAME_SIZE - rxBuffer.size();
+        if(available == 0) return;
+
+        // Direct read into the buffer
+        uint8_t byte;
+        while(available > 0 && rxCallback(&byte, 1) > 0) {
+            rxBuffer.push(byte);
+            available--;
+        }
+    }
+
+    /* @brief Find a proto by its ID
+     * @param id: The ID of the proto to find
+     * @return The pointer to the proto found or nullptr if not found */
     ProtoStore* findProto(uint8_t id) {
-        for(size_t i = 0; i < SimpleCommDfs::MAX_PROTOS; i++) {
+        for(size_t i = 0; i < EZLinkDfs::MAX_PROTOS; i++) {
             if(protos[i].id == id) {
                 return &protos[i];
             }
@@ -849,59 +954,32 @@ private:
         return nullptr;
     }
 
-    // Find a free slot
+    /* @brief Find a free slot
+     * @return The pointer to the free slot found or nullptr if no free slot is found */
     ProtoStore* findFreeSlot() {
-        for(size_t i = 0; i < SimpleCommDfs::MAX_PROTOS; i++) {
-            if(protos[i].id == SimpleCommDfs::NULL_FC) {
+        for(size_t i = 0; i < EZLinkDfs::MAX_PROTOS; i++) {
+            if(protos[i].id == EZLinkDfs::NULL_ID) {
                 return &protos[i];
             }
         }
         return nullptr;
     }
 
-    // Compare 2 strings
+    /* @brief Compare 2 strings
+     * @param a: The first string
+     * @param b: The second string
+     * @return True if the strings are equal, false otherwise */
     static bool strEqual(const char* a, const char* b) {
         return strcmp(a, b) == 0;
     }
 
-    // Fonction pour envoyer automatiquement un ACK
-    void autoSendAck(uint8_t originalId, const void* payload, size_t payloadSize) {
-        // Vérifier qu'on n'est pas déjà en train de capturer une frame
-        if(frameCapturePending) {
-            return;  // On ne peut pas envoyer d'ACK pendant une capture
-        }
-        
-        // Create the ACK ID (bit 7 = 1)
-        uint8_t ackId = originalId | SimpleCommDfs::FC_RESPONSE_BIT;
-        
-        // Vérifier qu'on a assez d'espace dans le buffer TX
-        size_t frameSize = payloadSize + SimpleCommDfs::FRAME_OVERHEAD;
-        if(frameSize > serial->availableForWrite()) {
-            return;  // Buffer TX plein, on ne peut pas envoyer l'ACK
-        }
-        
-        // Construire la frame d'ACK
-        uint8_t frame[SimpleCommDfs::MAX_FRAME_SIZE];
-        frame[0] = SimpleCommDfs::START_OF_FRAME;
-        frame[1] = frameSize;
-        frame[2] = ackId;
-        memcpy(&frame[3], payload, payloadSize);
-        
-        // Calculer et ajouter le CRC
-        uint16_t crc = calculateCRC16(frame, frameSize - 2);
-        frame[frameSize-2] = (uint8_t)(crc >> 8);
-        frame[frameSize-1] = (uint8_t)(crc & 0xFF);
-        
-        // Envoyer la frame
-        serial->write(frame, frameSize);
-        serial->flush();
-    }
-
 #ifdef UNIT_TESTING
 public:
-    // Méthode pour les tests uniquement
+    /* @brief Method to get the proto store (for tests only)
+     * @param id: The ID of the proto to get
+     * @return The pointer to the proto found or nullptr if not found */
     const ProtoStore* getProtoStore(uint8_t id) const {
-        for(size_t i = 0; i < SimpleCommDfs::MAX_PROTOS; i++) {
+        for(size_t i = 0; i < EZLinkDfs::MAX_PROTOS; i++) {
             if(protos[i].id == id) {
                 return &protos[i];
             }

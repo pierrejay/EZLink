@@ -1,7 +1,8 @@
 #include <Arduino.h>
 #include <unity.h>
-#include "SimpleComm.h"
-#include "SimpleComm_Proto.h"
+#include <vector>
+#include "EZLink.h"
+#include "EZLink_Proto.h"
 
 // Communication pins
 #define UART1_RX D5
@@ -12,47 +13,42 @@
 // Délai de poll pour le slave
 #define SLAVE_DELAY_MS 10
 
-SimpleComm master(&Serial1, 500, &Serial, "MASTER");
-SimpleComm slave(&Serial2, 500, &Serial, "SLAVE");
+EZLink master(&Serial1, 500, &Serial, "MASTER");
+EZLink slave(&Serial2, 500, &Serial, "SLAVE");
 
 TaskHandle_t slaveTask = NULL;
 
 // Message avec payload maximum
 struct MaxPayloadMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE;
-    static constexpr const char* name = "MAX_PAYLOAD";
+    static constexpr MsgType type = MsgType::MESSAGE;
     static constexpr uint8_t id = 10;
-    uint8_t data[SimpleCommDfs::MAX_FRAME_SIZE - SimpleCommDfs::FRAME_OVERHEAD];  // Taille maximale possible
+    uint8_t data[EZLinkDfs::MAX_FRAME_SIZE - EZLinkDfs::FRAME_OVERHEAD];  // Taille maximale possible
 } __attribute__((packed));
 
 // Message avec payload vide
 struct EmptyMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE;
-    static constexpr const char* name = "EMPTY";
+    static constexpr MsgType type = MsgType::MESSAGE;
     static constexpr uint8_t id = 11;
     // Pas de données !
 } __attribute__((packed));
 
 // Message pour test en rafale
 struct BurstMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE_ACK;  // On utilise ACK pour vérifier la réception
-    static constexpr const char* name = "BURST";
+    static constexpr MsgType type = MsgType::MESSAGE_ACK;  // On utilise ACK pour vérifier la réception
     static constexpr uint8_t id = 12;
     uint32_t sequence;  // Numéro de séquence pour vérifier l'ordre
 } __attribute__((packed));
 
 // Messages pour test bidirectionnel
 struct PongMsg {
-    static constexpr ProtoType type = ProtoType::RESPONSE;
-    static constexpr const char* name = "PONG";
+    static constexpr MsgType type = MsgType::RESPONSE;
     static constexpr uint8_t id = 13;
     uint32_t echo_timestamp;
     uint32_t response_timestamp;
 } __attribute__((packed));
 
 struct PingMsg {
-    static constexpr ProtoType type = ProtoType::REQUEST;
-    static constexpr const char* name = "PING";
+    static constexpr MsgType type = MsgType::REQUEST;
     static constexpr uint8_t id = 13;
     uint32_t timestamp;
     using ResponseType = PongMsg;
@@ -69,7 +65,7 @@ void sendCustomFrame(HardwareSerial* serial, uint8_t sof, uint8_t len, uint8_t i
 
     // Si crc == 0, on le calcule sur la frame complète
     if(crc == 0) {
-        crc = SimpleComm::calculateCRC16(frame.data(), frame.size());
+        crc = EZLink::calculateCRC16(frame.data(), frame.size());
     }
     
     // Ajouter le CRC
@@ -111,10 +107,10 @@ void startSlaveTask() {
             Serial.println("Tâche slave démarrée");
             while(true) {
                 auto result = slave.poll();
-                if(result == SimpleComm::SUCCESS) {
+                if(result == EZLink::SUCCESS) {
                     Serial.println("Slave: message traité");
                 }
-                else if(result != SimpleComm::NOTHING_TO_DO) {
+                else if(result != EZLink::NOTHING_TO_DO) {
                     Serial.printf("Slave: erreur poll %d\n", result.status);
                 }
                 vTaskDelay(pdMS_TO_TICKS(SLAVE_DELAY_MS));
@@ -156,14 +152,14 @@ void test_basic_communication() {
     SetLedMsg msg{.state = 1};
     auto result = master.sendMsg(msg);
     
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     // Give some time for reception
     delay(50);
     
     // Process message
     result = slave.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     TEST_ASSERT_TRUE(messageReceived);
 }
 
@@ -186,7 +182,7 @@ void test_ack_required() {
     
     // Process message - IMPORTANT !
     result = slave.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     TEST_ASSERT_TRUE(messageReceived);
 }
@@ -207,7 +203,7 @@ void test_request_response() {
     StatusResponseMsg resp;
     auto result = master.sendRequest(req, resp);
     
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     TEST_ASSERT_EQUAL(1, resp.state);
     TEST_ASSERT_EQUAL(1000, resp.uptime);
 
@@ -241,7 +237,7 @@ void test_max_payload() {
     });
     
     auto result = master.sendMsg(msg);
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     delay(50);  // Laisser le temps au slave de traiter
     TEST_ASSERT_TRUE(messageReceived);
@@ -264,7 +260,7 @@ void test_empty_payload() {
     });
     
     auto result = master.sendMsg(msg);
-    TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     delay(50);
     TEST_ASSERT_TRUE(messageReceived);
@@ -292,7 +288,7 @@ void test_burst_messages() {
         BurstMsg msg;
         msg.sequence = i;
         auto result = master.sendMsgAck(msg);  // On utilise ACK pour s'assurer de la réception
-        TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+        TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     }
     
     delay(100);  // Laisser le temps au traitement
@@ -325,7 +321,7 @@ void test_bidirectional() {
         PongMsg pong;
         
         auto result = master.sendRequest(ping, pong);
-        TEST_ASSERT_EQUAL(SimpleComm::SUCCESS, result.status);
+        TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
         uint32_t request_time = ping.timestamp;
         uint32_t response_time = pong.response_timestamp;
         TEST_ASSERT_GREATER_THAN(0, request_time);
@@ -343,7 +339,7 @@ void test_response_timeout() {
     StatusResponseMsg resp;
     auto result = master.sendRequest(req, resp);
     
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_TIMEOUT, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_RCV_TIMEOUT, result.status);
 }
 
 void test_corrupted_crc() {
@@ -352,12 +348,12 @@ void test_corrupted_crc() {
     // Le master envoie un message avec CRC invalide au slave
     std::vector<uint8_t> data = {0x01};  // Exemple de données
     uint16_t invalidCRC = 0xFFFF;  // CRC invalide
-    sendCustomFrame(&Serial1, SimpleCommDfs::START_OF_FRAME, data.size() + SimpleCommDfs::FRAME_OVERHEAD, data.size(), data, invalidCRC);
+    sendCustomFrame(&Serial1, EZLinkDfs::START_OF_FRAME, data.size() + EZLinkDfs::FRAME_OVERHEAD, data.size(), data, invalidCRC);
     
     // Le slave doit détecter l'erreur
     delay(20);  // Laisser le temps à la transmission UART
     auto result = slave.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_CRC, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_RCV_CRC, result.status);
 }
 
 void test_truncated_message() {
@@ -369,7 +365,7 @@ void test_truncated_message() {
     
     // 1. Envoyer un message tronqué : on annonce une longueur de 12 (0x0C) mais on envoie moins
     std::vector<uint8_t> truncated_data = {0x01, 0x42};  // ID + payload
-    sendCustomFrame(&Serial1, SimpleCommDfs::START_OF_FRAME, 0x0C, 0x01, truncated_data, 0);
+    sendCustomFrame(&Serial1, EZLinkDfs::START_OF_FRAME, 0x0C, 0x01, truncated_data, 0);
     
     // 2. Envoyer un message valide (SetLedMsg)
     SetLedMsg msg{.state = 1};
@@ -379,16 +375,16 @@ void test_truncated_message() {
     
     // 3. Premier poll() doit détecter l'erreur CRC (car il lira des données du message suivant)
     auto result = slave.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_CRC, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_RCV_CRC, result.status);
     
     // 4. Continuer à poller jusqu'à avoir traité tous les messages
     bool success_found = false;
     while(true) {
         result = slave.poll();
-        if(result.status == SimpleComm::SUCCESS) {
+        if(result.status == EZLink::SUCCESS) {
             success_found = true;
         }
-        else if(result.status == SimpleComm::NOTHING_TO_DO) {
+        else if(result.status == EZLink::NOTHING_TO_DO) {
             break;
         }
         // On ignore les autres erreurs potentielles (invalid SOF etc)
@@ -403,14 +399,14 @@ void test_invalid_sof() {
     
     // Envoyer un message avec un SOF incorrect
     std::vector<uint8_t> data = {0x01, 0x02, 0x03};  // Exemple de données
-    uint16_t crc = SimpleComm::calculateCRC16(data.data(), data.size());
-    sendCustomFrame(&Serial1, 0x55, data.size() + SimpleCommDfs::FRAME_OVERHEAD, data.size(), data, crc);  // SOF incorrect
+    uint16_t crc = EZLink::calculateCRC16(data.data(), data.size());
+    sendCustomFrame(&Serial1, 0x55, data.size() + EZLinkDfs::FRAME_OVERHEAD, data.size(), data, crc);  // SOF incorrect
     
     // Poller pour vérifier l'erreur
     delay(20);  // Laisser le temps à la transmission UART
     auto result = slave.poll();
-    bool got_invalid_sof = (result.status == SimpleComm::ERR_RCV_INVALID_SOF);
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_INVALID_SOF, result.status);
+    bool got_invalid_sof = (result.status == EZLink::ERR_RCV_INVALID_SOF);
+    TEST_ASSERT_EQUAL(EZLink::ERR_RCV_INVALID_SOF, result.status);
 }
 
 void test_invalid_length() {
@@ -418,13 +414,13 @@ void test_invalid_length() {
     
     // Envoyer un message avec une longueur incorrecte
     std::vector<uint8_t> data = {0x01, 0x02, 0x03};  // Exemple de données
-    uint16_t crc = SimpleComm::calculateCRC16(data.data(), data.size());
-    sendCustomFrame(&Serial1, SimpleCommDfs::START_OF_FRAME, 255, data.size(), data, crc);  // Longueur incorrecte
+    uint16_t crc = EZLink::calculateCRC16(data.data(), data.size());
+    sendCustomFrame(&Serial1, EZLinkDfs::START_OF_FRAME, 255, data.size(), data, crc);  // Longueur incorrecte
     
     // Poller pour vérifier l'erreur
     delay(20);  // Laisser le temps à la transmission UART
     auto result = slave.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_INVALID_LEN, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_RCV_INVALID_LEN, result.status);
 }
 
 void test_unexpected_response() {
@@ -432,12 +428,12 @@ void test_unexpected_response() {
     
     // Ici c'est différent : le slave envoie une réponse inattendue au master
     std::vector<uint8_t> payload = {0x42};  // Données quelconques
-    sendCustomFrame(&Serial2, SimpleCommDfs::START_OF_FRAME, 6, 0x81, payload, 0);  // ID avec bit de réponse
+    sendCustomFrame(&Serial2, EZLinkDfs::START_OF_FRAME, 6, 0x81, payload, 0);  // ID avec bit de réponse
     
     // Le master doit détecter l'erreur
     delay(20);  // Laisser le temps à la transmission UART
     auto result = master.poll();
-    TEST_ASSERT_EQUAL(SimpleComm::ERR_RCV_UNEXPECTED_RESPONSE, result.status);
+    TEST_ASSERT_EQUAL(EZLink::ERR_RCV_UNEXPECTED_RESPONSE, result.status);
 }
 
 void test_oversized_message() {
@@ -449,7 +445,7 @@ void test_oversized_message() {
     
     // 1. Envoyer un message plus long que sa LEN indiquée
     std::vector<uint8_t> oversized_data = {0x01, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48};  // 8 bytes de données
-    sendCustomFrame(&Serial1, SimpleCommDfs::START_OF_FRAME, 0x05, 0x01, oversized_data, 0);  // LEN = 5 mais données plus longues
+    sendCustomFrame(&Serial1, EZLinkDfs::START_OF_FRAME, 0x05, 0x01, oversized_data, 0);  // LEN = 5 mais données plus longues
     
     // 2. Envoyer un message valide (SetLedMsg)
     SetLedMsg msg{.state = 1};
@@ -459,16 +455,16 @@ void test_oversized_message() {
     
     // 3. Premier poll() doit détecter l'erreur CRC
     auto first_result = slave.poll();
-    bool got_crc_error = (first_result.status == SimpleComm::ERR_RCV_CRC);
+    bool got_crc_error = (first_result.status == EZLink::ERR_RCV_CRC);
 
     // 4. Continuer à poller jusqu'à avoir traité tous les messages
     bool success_found = false;
     while(true) {
         auto result = slave.poll();
-        if(result.status == SimpleComm::SUCCESS) {
+        if(result.status == EZLink::SUCCESS) {
             success_found = true;
         }
-        else if(result.status == SimpleComm::NOTHING_TO_DO) {
+        else if(result.status == EZLink::NOTHING_TO_DO) {
             break;
         }
         // yield();
@@ -480,30 +476,170 @@ void test_oversized_message() {
     TEST_ASSERT_TRUE(success_found);
 }
 
+// Buffer circulaire simple pour simuler un UART hardware
+class MockUartBuffer {
+private:
+    static constexpr size_t SIZE = 256;
+    uint8_t buffer[SIZE];
+    volatile size_t head = 0;
+    volatile size_t tail = 0;
+
+public:
+    size_t write(const uint8_t* data, size_t len) {
+        size_t written = 0;
+        for(size_t i = 0; i < len; i++) {
+            size_t next = (head + 1) % SIZE;
+            if(next != tail) {
+                buffer[head] = data[i];
+                head = next;
+                written++;
+            }
+        }
+        return written;
+    }
+
+    size_t read(uint8_t* data, size_t maxLen) {
+        size_t read = 0;
+        while(read < maxLen && tail != head) {
+            data[read++] = buffer[tail];
+            tail = (tail + 1) % SIZE;
+        }
+        return read;
+    }
+};
+
+void test_custom_callbacks() {
+    Serial.println("Début test_custom_callbacks");
+
+    static MockUartBuffer masterToSlave;
+    static MockUartBuffer slaveToMaster;
+    TaskHandle_t callbackSlaveTask = NULL;  // Handle local au test
+
+    // Créer les instances master et slave
+    EZLink master(
+        [](const uint8_t* data, size_t len) {
+            return masterToSlave.write(data, len);
+        },
+        [](uint8_t* data, size_t maxLen) {
+            return slaveToMaster.read(data, maxLen);
+        }
+    );
+
+    EZLink slave(
+        [](const uint8_t* data, size_t len) {
+            return slaveToMaster.write(data, len);
+        },
+        [](uint8_t* data, size_t maxLen) {
+            return masterToSlave.read(data, maxLen);
+        }
+    );
+
+    // Enregistrer les messages sur les deux instances
+    master.registerRequest<SetLedMsg>();
+    master.registerRequest<SetPwmMsg>();
+    master.registerRequest<GetStatusMsg>();
+    master.registerResponse<StatusResponseMsg>();
+
+    slave.registerRequest<SetLedMsg>();
+    slave.registerRequest<SetPwmMsg>();
+    slave.registerRequest<GetStatusMsg>();
+    slave.registerResponse<StatusResponseMsg>();
+
+    // Configurer les handlers sur le slave
+    bool messageLedReceived = false;
+    slave.onReceive<SetLedMsg>([&messageLedReceived](const SetLedMsg& msg) {
+        messageLedReceived = true;
+        TEST_ASSERT_EQUAL(1, msg.state);
+    });
+
+    slave.onReceive<SetPwmMsg>([](const SetPwmMsg& msg) {
+        TEST_ASSERT_EQUAL(1000, msg.freq);
+    });
+
+    slave.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp) {
+        resp.state = 1;
+        resp.uptime = 1000;
+    });
+
+    // Démarrer la tâche slave spécifique à ce test
+    xTaskCreatePinnedToCore(
+        [](void* parameter) {
+            EZLink* slaveInstance = (EZLink*)parameter;
+            while(true) {
+                auto result = slaveInstance->poll();
+                if(result == EZLink::SUCCESS) {
+                    Serial.println("Callback slave: message traité");
+                }
+                else if(result != EZLink::NOTHING_TO_DO) {
+                    Serial.printf("Callback slave: erreur poll %d\n", result.status);
+                }
+                vTaskDelay(pdMS_TO_TICKS(SLAVE_DELAY_MS));
+            }
+        },
+        "callbackSlaveTask",
+        10000,
+        &slave,  // Passe l'instance locale
+        1,
+        &callbackSlaveTask,
+        1
+    );
+
+    // Test 1: MESSAGE simple
+    SetLedMsg ledMsg{.state = 1};
+    auto resultSendLed = master.sendMsg(ledMsg);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, resultSendLed.status);
+
+    delay(50);  // Laisser le temps au slave de traiter
+    TEST_ASSERT_TRUE(messageLedReceived);
+
+    // Test 2: MESSAGE_ACK
+    SetPwmMsg pwmMsg{.pin = 1, .freq = 1000};
+    auto resultSendPwm = master.sendMsgAck(pwmMsg);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, resultSendPwm.status);
+
+    // Test 3: REQUEST/RESPONSE
+    GetStatusMsg req;
+    StatusResponseMsg resp;
+    auto resultRequest = master.sendRequest(req, resp);
+    TEST_ASSERT_EQUAL(EZLink::SUCCESS, resultRequest.status);
+    TEST_ASSERT_EQUAL(1, resp.state);
+    TEST_ASSERT_EQUAL(1000, resp.uptime);
+
+    // Cleanup spécifique à ce test
+    if (callbackSlaveTask != NULL) {
+        vTaskDelete(callbackSlaveTask);
+        callbackSlaveTask = NULL;
+    }
+}
+
 void setup() {
     delay(2000);  // Give monitor time to connect
     testsInit(); // Initialize hardware
     
     UNITY_BEGIN();
     
+    // Tests de base
     RUN_TEST(test_basic_communication);
     RUN_TEST(test_ack_required);
     RUN_TEST(test_request_response);
     
-    // Nouveaux tests de robustesse
+    // Tests de robustesse
     RUN_TEST(test_max_payload);
     RUN_TEST(test_empty_payload);
     RUN_TEST(test_burst_messages);
     RUN_TEST(test_bidirectional);
     
-    // Nouveaux tests d'erreur
+    // Tests avancés
     RUN_TEST(test_response_timeout);
     RUN_TEST(test_corrupted_crc);
     RUN_TEST(test_truncated_message);
     RUN_TEST(test_invalid_sof);
     RUN_TEST(test_invalid_length);
     RUN_TEST(test_unexpected_response);
-    // RUN_TEST(test_oversized_message);
+    RUN_TEST(test_oversized_message);
+
+    // Tests avec callbacks custom
+    RUN_TEST(test_custom_callbacks);
     UNITY_END();
     
     // Final cleanup

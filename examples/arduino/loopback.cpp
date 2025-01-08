@@ -14,7 +14,8 @@
 #define USB Serial
 
 // Delays
-#define MASTER_DELAY_MS 500  // 500ms between each test
+#define MASTER_DELAY_MS 500  // 2s between each test
+#define SLAVE_DELAY_MS 10     // 10ms between polls
 
 // Log queue
 QueueHandle_t logQueue;
@@ -340,7 +341,7 @@ void slaveTask(void* parameter) {
                 txRxStats.slaveErrors.rxErrors++; // Default to RX error
             }
         }
-        taskYIELD(); // Poll as frequently as possible
+        vTaskDelay(pdMS_TO_TICKS(SLAVE_DELAY_MS));
     }
 }
 
