@@ -1,12 +1,16 @@
 # EZLink Documentation
 
-> *Lightweight, robust, simple messaging library for secure structured communication between microcontrollers*
-
-This document provides a thorough overview of **EZLink**, from its motivations to detailed usage examples, design overview, advanced features, and testing strategies. It is intended for developers who need a dependable solution without excessive overhead or complex toolchains.
+> *Lightweight, robust & user-friendly messaging library for secure structured communication between microcontrollers*
 
 ## Introduction
 
-**EZLink** is a C++ library designed for **lightweight & robust communication** between microcontrollers (typically via UART, but suitable to any transport layer carrying binary data). Its primary goal is to **simplify** the process of exchanging structured binary frames, without requiring you to define your own protocol from scratch or adopt complex serialization frameworks.
+**EZLink** is a C++ library designed for **robust & low-overhead communication** between microcontrollers (typically via UART, but suitable to any transport layer carrying binary data). Its primary goal is to **simplify** the process of exchanging structured binary frames, without requiring you to define your own protocol from scratch or adopt complex serialization frameworks.
+
+The library is built around message structs that serve as message prototypes. You simply declare these structs in a declarative way using native C++ types, and the library handles all the framing, encoding, decoding and validation automatically. Think of it as a very lightweight alternative to Protobuf, combined with a robust transport layer that handles message framing and validation. All of this using simple C++ structs that double as both message definitions and instances, making the protocol self-documenting and easy to maintain.
+
+```cpp
+
+```
 
 Key design points:
 - Minimal Flash/RAM footprint (as low as ~2KB code size, optimization WIP): suitable for the most constrained microcontrollers such as STM32F03x series.
