@@ -26,11 +26,11 @@ Note: the current implementation is fully tested and functional (see below for d
 ### Shared Message Definition (messages.h)
 ```cpp
 #include "EZLink.h"
-using ProtoType = EZLink::ProtoType;
+using MsgType = EZLink::MsgType;
 
 // Simple control message with acknowledgment
 struct ControlMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE_ACK;
+    static constexpr MsgType type = MsgType::MESSAGE_ACK;
     static constexpr uint8_t id = 1;
     
     uint8_t channel;     // Which channel to control
@@ -168,7 +168,7 @@ A minimal project layout example is shown below:
 
 ### Naming & ID Rules
 - Each proto struct declares:  
-  - `static constexpr ProtoType type;` (see above)
+  - `static constexpr MsgType type;` (see above)
   - `static constexpr uint8_t id;` (must be in **1..127** for requests/messages).  
 
 - Basic rules:
@@ -188,11 +188,11 @@ Basically, each message received is sure to be of the type expected by its liste
 ```cpp
 #include "EZLink.h"
 
-using ProtoType = EZLink::ProtoType;
+using MsgType = EZLink::MsgType;
 
 // Motor control message (one-way command)
 struct SetMotorMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE;
+    static constexpr MsgType type = MsgType::MESSAGE;
     static constexpr uint8_t id = 1;
     uint8_t motor_id;      // Which motor (1-4)
     int16_t speed;         // -1000 to +1000
@@ -202,7 +202,7 @@ struct SetMotorMsg {
 
 // PID configuration (requires acknowledgment)
 struct ConfigPidMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE_ACK;
+    static constexpr MsgType type = MsgType::MESSAGE_ACK;
     static constexpr uint8_t id = 2;
     uint8_t channel;    // Which control loop
     float kp;          // Proportional gain
@@ -212,7 +212,7 @@ struct ConfigPidMsg {
 
 // Sensor data response
 struct SensorDataResponse {
-    static constexpr ProtoType type = ProtoType::RESPONSE;
+    static constexpr MsgType type = MsgType::RESPONSE;
     static constexpr uint8_t id = 3;
     int16_t temperature;   // Celsius x100 (-4000 to +15000)
     uint16_t humidity;     // RH x100 (0 to 10000)
@@ -222,7 +222,7 @@ struct SensorDataResponse {
 
 // Request sensor data
 struct GetSensorDataMsg {
-    static constexpr ProtoType type = ProtoType::REQUEST;
+    static constexpr MsgType type = MsgType::REQUEST;
     static constexpr uint8_t id = 3;
     uint8_t sensorId;      // Target sensor ID
     using ResponseType = SensorDataResponse;

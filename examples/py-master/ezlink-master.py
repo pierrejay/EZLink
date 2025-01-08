@@ -1,8 +1,8 @@
 
 """
-SimpleCommPy - Simple communication protocol Python implementation (Master side)
+EZLinkPy - Simple communication protocol Python implementation (Master side)
 
-This module provides a lightweight implementation of the SimpleComm protocol
+This module provides a lightweight implementation of the EZLink protocol
 for Python, focusing on the master side functionality.
 """
 
@@ -17,23 +17,23 @@ MAX_FRAME_SIZE = 32
 FRAME_OVERHEAD = 5  # SOF + LEN + ID + CRC16
 
 class ProtoType(enum.Enum):
-    """Message types supported by SimpleComm"""
+    """Message types supported by EZLink"""
     MESSAGE = 0       # Simple message without response
     MESSAGE_ACK = 1   # Message requiring acknowledgment
     REQUEST = 2       # Request expecting a specific response
     RESPONSE = 3      # Response to a request
 
-class SimpleCommError(Exception):
-    """Base class for SimpleComm exceptions"""
+class EZLinkError(Exception):
+    """Base class for EZLink exceptions"""
     pass
 
-class FrameError(SimpleCommError):
+class FrameError(EZLinkError):
     """Raised when there's an error building or parsing a frame"""
     pass
 
 @dataclass
 class Frame:
-    """Represents a SimpleComm frame"""
+    """Represents a EZLink frame"""
     id: int
     payload: bytes
     
@@ -59,17 +59,17 @@ def calculate_crc16(data: bytes) -> int:
             crc &= 0xFFFF
     return crc
 
-class SimpleComm:
+class EZLink:
     """
-    SimpleComm protocol implementation for Python (Master side)
+    EZLink protocol implementation for Python (Master side)
     
-    This class provides methods to build and parse SimpleComm frames,
+    This class provides methods to build and parse EZLink frames,
     with a focus on the master side functionality (sending requests
     and receiving responses).
     """
     
     def __init__(self):
-        """Initialize the SimpleComm instance"""
+        """Initialize the EZLink instance"""
         # Keep track of registered message types for parsing
         self._message_types: Dict[int, type] = {}
     
@@ -98,7 +98,7 @@ class SimpleComm:
     
     def build_frame(self, message) -> bytes:
         """
-        Build a SimpleComm frame for a message object.
+        Build a EZLink frame for a message object.
         The message object must be an instance of a registered message class.
         """
         msg_class = type(message)

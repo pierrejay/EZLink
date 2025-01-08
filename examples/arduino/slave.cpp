@@ -1,8 +1,8 @@
 #include <Arduino.h>
-#include "SimpleComm.h"
-#include "SimpleComm_Proto.h"
+#include "EZLink.h"
+#include "EZLink_Proto.h"
 
-SimpleComm comm(&Serial1);  // Directly use HardwareSerial
+EZLink comm(&Serial1);  // Directly use HardwareSerial
 
 void setup() {
     Serial.begin(115200);  // Debug

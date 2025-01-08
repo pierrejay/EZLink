@@ -1,10 +1,10 @@
-# Python SimpleComm Library Documentation
+# Python EZLink Library Documentation
 
-> A lightweight Python implementation of the SimpleComm protocol for master devices
+> A lightweight Python implementation of the EZLink protocol for master devices
 
 ## Overview
 
-SimpleComm Python is a minimalist library that implements the SimpleComm protocol for master devices (typically a Raspberry Pi or computer) communicating with microcontrollers. It handles frame creation, parsing, and basic request/response patterns.
+EZLink Python is a minimalist library that implements the EZLink protocol for master devices (typically a Raspberry Pi or computer) communicating with microcontrollers. It handles frame creation, parsing, and basic request/response patterns.
 
 ## Installation
 
@@ -16,7 +16,7 @@ pip install pyserial dataclasses
 ### Quick Start
 Copy the `simplecomm.py` file to your project and import it:
 ```python
-from simplecomm import SimpleComm, SimpleCommError
+from simplecomm import EZLink, EZLinkError
 ```
 
 ## Basic Usage
@@ -49,9 +49,9 @@ class StatusResponse:
     uptime: int
 ```
 
-### 2. Initialize SimpleComm
+### 2. Initialize EZLink
 ```python
-comm = SimpleComm()
+comm = EZLink()
 
 # Register all your message types
 comm.register_message(SetLedMsg)
@@ -86,10 +86,10 @@ except FrameError as e:
 Here's a complete example showing a master implementation with serial communication:
 
 ```python
-class SimpleCommMaster:
+class EZLinkMaster:
     def __init__(self, port: str, baudrate: int = 115200):
         self.serial = serial.Serial(port, baudrate)
-        self.comm = SimpleComm()
+        self.comm = EZLink()
         
         # Register your message types
         self.comm.register_message(SetLedMsg)
@@ -121,7 +121,7 @@ class SimpleCommMaster:
         self.serial.close()
 
 # Usage example
-master = SimpleCommMaster('/dev/ttyUSB0')
+master = EZLinkMaster('/dev/ttyUSB0')
 try:
     # Simple message
     led_on = SetLedMsg(state=1)
@@ -160,7 +160,7 @@ The protocol supports several types of messages:
 
 ### Error Handling
 The library provides several error types:
-- `SimpleCommError`: Base exception class
+- `EZLinkError`: Base exception class
 - `FrameError`: Raised for frame construction/parsing errors
 
 Common error cases:

@@ -1,8 +1,8 @@
 #include <Arduino.h>
-#include "SimpleComm.h"
-#include "SimpleComm_Proto.h"
+#include "EZLink.h"
+#include "EZLink_Proto.h"
 
-SimpleComm comm(&Serial1);  // Directly use HardwareSerial
+EZLink comm(&Serial1);  // Directly use HardwareSerial
 
 void setup() {
     Serial.begin(115200);  // Debug
@@ -24,7 +24,7 @@ void loop() {
     // 2. With ACK
     SetPwmMsg pwm{.pin = 1, .freq = 1000};
     auto result = comm.sendMsgAck(pwm);
-    if(result == SimpleComm::SUCCESS) {
+    if(result == EZLink::SUCCESS) {
         Serial.println("PWM set successfully");
     }
     delay(1000);
@@ -33,7 +33,7 @@ void loop() {
     GetStatusMsg req;
     StatusResponseMsg resp;
     result = comm.sendRequest(req, resp);
-    if(result == SimpleComm::SUCCESS) {
+    if(result == EZLink::SUCCESS) {
         Serial.printf("LED state: %d, uptime: %d ms\n", 
             resp.state, resp.uptime);
     }

@@ -116,7 +116,7 @@ public:
     using RxCallback = std::function<size_t(uint8_t*, size_t)>;        // Read from external interface
 
     /* @brief Proto types */
-    enum class ProtoType {
+    enum class MsgType {
         MESSAGE,  // No response expected
         MESSAGE_ACK,     // Echo expected
         REQUEST,          // Expect a specific response
@@ -283,9 +283,9 @@ public:
      * @return Result of the operation */
     template<typename T>
     Result registerRequest() {
-        static_assert(T::type == ProtoType::REQUEST || 
-                     T::type == ProtoType::MESSAGE || 
-                     T::type == ProtoType::MESSAGE_ACK,
+        static_assert(T::type == MsgType::REQUEST || 
+                     T::type == MsgType::MESSAGE || 
+                     T::type == MsgType::MESSAGE_ACK,
                      "You tried to register a RESPONSE with registerRequest() - use registerResponse() for RESPONSE types");
         static_assert(T::id != EZLinkDfs::NULL_ID, "ID=0 is reserved/invalid");
         static_assert((T::id & EZLinkDfs::ID_RESPONSE_BIT) == 0, "Request ID must be <= 127");
@@ -298,7 +298,7 @@ public:
      * @return Result of the operation */
     template<typename T>
     Result registerResponse() {
-        static_assert(T::type == ProtoType::RESPONSE, 
+        static_assert(T::type == MsgType::RESPONSE, 
                      "Wrong message type - registerResponse() only works with RESPONSE types");
         static_assert(T::id != EZLinkDfs::NULL_ID, "ID=0 is reserved/invalid");
         static_assert((T::id & EZLinkDfs::ID_RESPONSE_BIT) == 0, "Response ID must be <= 127");
@@ -320,8 +320,8 @@ public:
      * @return Result of the operation */
     template<typename T>
     Result onReceive(std::function<void(const T&)> handler) {
-        static_assert(T::type == ProtoType::MESSAGE || 
-                     T::type == ProtoType::MESSAGE_ACK,
+        static_assert(T::type == MsgType::MESSAGE || 
+                     T::type == MsgType::MESSAGE_ACK,
                      "onReceive only works with MESSAGE or MESSAGE_ACK messages");
         return onMessage<T>(handler);
     }
@@ -331,9 +331,9 @@ public:
      * @return Result of the operation */
     template<typename REQ>
     Result onRequest(std::function<void(const REQ&, typename REQ::ResponseType&)> handler) {
-        static_assert(REQ::type == ProtoType::REQUEST, 
+        static_assert(REQ::type == MsgType::REQUEST, 
                      "onRequest only works with REQUEST messages");
-        static_assert(REQ::ResponseType::type == ProtoType::RESPONSE, 
+        static_assert(REQ::ResponseType::type == MsgType::RESPONSE, 
                      "Response type must be RESPONSE");
         
         return onMessage<REQ>([this, handler](const REQ& req) {
@@ -360,7 +360,7 @@ public:
      * @return Result of the operation */
     template<typename T>
     Result sendMsg(const T& msg) {
-        static_assert(T::type == ProtoType::MESSAGE, "Wrong message type, sendMsg() only works with MESSAGE messages");
+        static_assert(T::type == MsgType::MESSAGE, "Wrong message type, sendMsg() only works with MESSAGE messages");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert((T::id & EZLinkDfs::ID_RESPONSE_BIT) == 0, "ID must be <= 127");
         static_assert(T::id != EZLinkDfs::NULL_ID, "ID must not be NULL (0)");  // Check at compilation
@@ -372,7 +372,7 @@ public:
      * @return Result of the operation */
     template<typename T>
     Result sendMsgAck(const T& msg) {
-        static_assert(T::type == ProtoType::MESSAGE_ACK, "Wrong message type, sendMsgAck() only works with MESSAGE_ACK messages");
+        static_assert(T::type == MsgType::MESSAGE_ACK, "Wrong message type, sendMsgAck() only works with MESSAGE_ACK messages");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert((T::id & EZLinkDfs::ID_RESPONSE_BIT) == 0, "ID must be <= 127");
         static_assert(T::id != EZLinkDfs::NULL_ID, "ID must not be NULL (0)");  // Check at compilation
@@ -427,8 +427,8 @@ public:
      * @return Result of the operation */
     template<typename REQ, typename RESP>
     Result sendRequest(const REQ& req, RESP& resp) {
-        static_assert(REQ::type == ProtoType::REQUEST, "Wrong message type, sendRequest() only works with REQUEST messages");
-        static_assert(RESP::type == ProtoType::RESPONSE, "Response must be a RESPONSE type");
+        static_assert(REQ::type == MsgType::REQUEST, "Wrong message type, sendRequest() only works with REQUEST messages");
+        static_assert(RESP::type == MsgType::RESPONSE, "Response must be a RESPONSE type");
         static_assert(std::is_same<RESP, typename REQ::ResponseType>::value, "Response type doesn't match request's ResponseType");
         static_assert(std::is_standard_layout<REQ>::value, "Request type must be POD/standard-layout");
         static_assert(std::is_standard_layout<RESP>::value, "Response type must be POD/standard-layout");
@@ -515,7 +515,7 @@ public:
                 // If it's a MESSAGE_ACK message, send the ACK automatically,
                 // flipping the ID
                 uint8_t ackId = result.id | EZLinkDfs::ID_RESPONSE_BIT;
-                if(proto->type == ProtoType::MESSAGE_ACK) {
+                if(proto->type == MsgType::MESSAGE_ACK) {
                     sendFrame(ackId, &rxBuffer[3], proto->size);
                 }
             }
@@ -578,7 +578,7 @@ public:
 private:
     /* @brief Structure to store message prototypes */
     struct ProtoStore {
-        ProtoType type = ProtoType::MESSAGE;
+        MsgType type = MsgType::MESSAGE;
         const char* name = nullptr;
         uint8_t id = EZLinkDfs::NULL_ID;
         size_t size = 0;

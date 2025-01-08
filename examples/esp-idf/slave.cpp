@@ -2,8 +2,8 @@
 #include <driver/gpio.h>
 #include <driver/ledc.h>
 #include "esp_timer.h"
-#include "SimpleComm.h"
-#include "SimpleComm_Proto.h"
+#include "EZLink.h"
+#include "EZLink_Proto.h"
 
 // UART configuration
 #define UART_NUM UART_NUM_1
@@ -19,7 +19,7 @@
 #define TASK_PRIORITY 5
 #define POLL_DELAY_MS 10
 
-SimpleComm comm(
+EZLink comm(
     // TX callback
     [](const uint8_t* data, size_t len) {
         return uart_write_bytes(UART_NUM, data, len);
@@ -34,10 +34,10 @@ SimpleComm comm(
 void pollTask(void* parameter) {
     while(1) {
         auto result = comm.poll();
-        if(result == SimpleComm::SUCCESS) {
+        if(result == EZLink::SUCCESS) {
             printf("Message processed\n");
         }
-        else if(result != SimpleComm::NOTHING_TO_DO) {
+        else if(result != EZLink::NOTHING_TO_DO) {
             printf("Poll error %d\n", result.status);
         }
         vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));

@@ -2,7 +2,7 @@
 #include "EZLink.h"
 
 // Allow to use the ProtoType enum without the EZLink prefix
-using ProtoType = EZLink::ProtoType;
+using MsgType = EZLink::MsgType;
 
 /**
  * Test messages for EZLink
@@ -38,14 +38,14 @@ using ProtoType = EZLink::ProtoType;
 
 // MESSAGE proto : simple LED command
 struct SetLedMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE;
+    static constexpr MsgType type = MsgType::MESSAGE;
     static constexpr uint8_t id = 1;
     uint8_t state;  // 0=OFF, 1=ON
 } __attribute__((packed));
 
 // MESSAGE_ACK proto : PWM configuration
 struct SetPwmMsg {
-    static constexpr ProtoType type = ProtoType::MESSAGE_ACK;
+    static constexpr MsgType type = MsgType::MESSAGE_ACK;
     static constexpr uint8_t id = 2;
     uint8_t pin;    // Pin number
     uint32_t freq;  // Frequency in Hz
@@ -53,7 +53,7 @@ struct SetPwmMsg {
 
 // RESPONSE proto : status response
 struct StatusResponseMsg {
-    static constexpr ProtoType type = ProtoType::RESPONSE;
+    static constexpr MsgType type = MsgType::RESPONSE;
     static constexpr uint8_t id = 3; // Must be the same as the request ID
     uint8_t state;    // Global state
     uint32_t uptime;  // Uptime since startup
@@ -61,7 +61,7 @@ struct StatusResponseMsg {
 
 // REQUEST proto : status request
 struct GetStatusMsg {
-    static constexpr ProtoType type = ProtoType::REQUEST;
+    static constexpr MsgType type = MsgType::REQUEST;
     static constexpr uint8_t id = 3;
     using ResponseType = StatusResponseMsg;  // Expected response type
 } __attribute__((packed));

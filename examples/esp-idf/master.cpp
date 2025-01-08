@@ -1,7 +1,7 @@
 #include <driver/uart.h>
 #include <driver/gpio.h>
-#include "SimpleComm.h"
-#include "SimpleComm_Proto.h"
+#include "EZLink.h"
+#include "EZLink_Proto.h"
 
 // UART configuration
 #define UART_NUM UART_NUM_1
@@ -14,7 +14,7 @@
 #define TASK_PRIORITY 5
 #define COMMAND_DELAY_MS 1000
 
-SimpleComm comm(
+EZLink comm(
     // TX callback
     [](const uint8_t* data, size_t len) {
         return uart_write_bytes(UART_NUM, data, len);
@@ -33,14 +33,14 @@ void commandTask(void* parameter) {
         // 1. Fire and forget - LED control
         SetLedMsg ledMsg{.state = 1};
         auto result = comm.sendMsg(ledMsg);
-        if(result == SimpleComm::SUCCESS) {
+        if(result == EZLink::SUCCESS) {
             printf("LED ON command sent\n");
         }
         vTaskDelay(pdMS_TO_TICKS(COMMAND_DELAY_MS));
 
         ledMsg.state = 0;
         result = comm.sendMsg(ledMsg);
-        if(result == SimpleComm::SUCCESS) {
+        if(result == EZLink::SUCCESS) {
             printf("LED OFF command sent\n");
         }
         vTaskDelay(pdMS_TO_TICKS(COMMAND_DELAY_MS));
@@ -51,7 +51,7 @@ void commandTask(void* parameter) {
             .freq = 1000
         };
         result = comm.sendMsgAck(pwmMsg);
-        if(result == SimpleComm::SUCCESS) {
+        if(result == EZLink::SUCCESS) {
             printf("PWM command acknowledged\n");
         } else {
             printf("PWM command failed: %d\n", result.status);
@@ -62,7 +62,7 @@ void commandTask(void* parameter) {
         GetStatusMsg req;
         StatusResponseMsg resp;
         result = comm.sendRequest(req, resp);
-        if(result == SimpleComm::SUCCESS) {
+        if(result == EZLink::SUCCESS) {
             printf("Status: LED=%d, uptime=%lu ms\n", 
                 resp.state, resp.uptime);
         } else {
