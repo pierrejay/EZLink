@@ -2,7 +2,7 @@
 
 > *Lightweight, robust, simple messaging library for secure structured communication between microcontrollers*
 
-This document provides a thorough overview of **SimpleComm**, from its motivations and design rationale to detailed usage examples, advanced features, and testing strategies. It is intended for professional developers who need a dependable solution without excessive overhead or complex toolchains.
+This document provides a thorough overview of **SimpleComm**, from its motivations to detailed usage examples, design overview, advanced features, and testing strategies. It is intended for developers who need a dependable solution without excessive overhead or complex toolchains.
 
 ## Introduction
 
@@ -19,7 +19,7 @@ Key design points:
 
 Whether you are building a Master/Slave setup over UART or need robust bidirectional communications, **SimpleComm** aims to keep things **KISS** (Keep It Simple, Stupid) while maximizing runtime safety (CRC checks, well-defined message boundaries, error codes, etc.).
 
-Note: the current implementation is fully tested and functional (see below for details), but work is still in progress to improve the software. I am currently focused on further reducing code size. The template approach generates lots of duplicate code, taking up ~500B of flash memory for each additional prototype. Serializing message structures earlier in the process should further reduce the code size down to less than 1KB + ~200B per message prototype.
+Note: the current implementation is fully tested and functional (see below for details), but work is still in progress to improve the software. I am currently focused on further reducing code size. The template approach generates lots of duplicate code, taking up ~500B of flash memory for each additional prototype. Serializing message structures earlier in the process should further reduce the code size down to less than 1KB + ~150B per message prototype.
 
 ## SimpleComm Minimal Example
 
