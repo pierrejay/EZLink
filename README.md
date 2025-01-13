@@ -441,9 +441,9 @@ Internally, the library:
 - Otherwise, you can supply custom callbacks (`std::function` handlers):
   - `TxCallback` for TX
   - `RxCallback` for RX
-- TX/RX callbacks will be called automatically by the library when needed to send and receive bytes to the hardware interface. This allows integration with any hardware driver, buffer, or OS primitives.
-- You can control how bytes are sent/received. This is especially useful in RTOS contexts or when using DMA-based ring buffers.
-- This callback-based approach allows EZLink to send and receive even during synchronous operations: even if the main thread is blocked, the library still has access to the hardware interface. It also reduces memory footprint by avoiding the need for dedicated buffers where the user would push/pull incoming and outgoing data: existing comm buffers are generally sufficient, especially with short message size like the default 32B - but you can still implement your own if needed.
+- TX/RX callbacks will be called automatically by the library when needed to send and receive bytes to the hardware interface. This allows integration with any hardware driver, buffer, or OS primitives. 
+- This callback-based approach allows EZLink to send and receive even during synchronous operations: even if the main thread is blocked, the library still has access to the hardware interface. 
+- It also reduces memory footprint by avoiding the need for dedicated buffers where the user would push/pull incoming and outgoing data: existing comm buffers are generally sufficient, especially with short message size like the default 32B - but you can still implement your own if needed.
 - The transport layer supports response timeout and transmission errors handling. However, retries are not handled by the library, you need to implement the logic yourself if required.
 
 ### Synchronous vs. Asynchronous
@@ -596,8 +596,6 @@ Under `test/test_hardware`, you’ll find tests that run on actual hardware, exc
 ```sh
 pio test -e hardware_test
 ```
-
-As a side note, the raw performance was measured at a ~2ms round-trip time per `MESSAGE_ACK`/`REQUEST` (w/o processing in the callback) between two ESP32S3s on a 115200 baud UART line, and as low as ~150µs using USB CDC between an MBP M1 (running a Python script to build, send & parse frames) and an ESP32S3, which means that the frame processing overhead is negligible compared to the transmission time.
 
 ## Examples
 
