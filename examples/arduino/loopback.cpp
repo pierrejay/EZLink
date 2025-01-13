@@ -141,11 +141,11 @@ ThreadSafeLogStream threadSafeLog;
 
 // Communication instances
 #ifdef EZLINK_DEBUG
-EZLink master(&UART1, EZLinkDfs::DEFAULT_RESPONSE_TIMEOUT_MS, &threadSafeLog, "MASTER");
-EZLink slave(&UART2, EZLinkDfs::DEFAULT_RESPONSE_TIMEOUT_MS, &threadSafeLog, "SLAVE");
+EZLink master(&UART1, &threadSafeLog, "DBG_MASTER");
+EZLink slave(&UART2, &threadSafeLog, "DBG_SLAVE");
 #else
-EZLink master(&UART1, EZLinkDfs::DEFAULT_RESPONSE_TIMEOUT_MS);
-EZLink slave(&UART2, EZLinkDfs::DEFAULT_RESPONSE_TIMEOUT_MS);
+EZLink master(&UART1);
+EZLink slave(&UART2);
 #endif
 
 // Test state

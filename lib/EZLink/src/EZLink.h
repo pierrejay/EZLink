@@ -10,7 +10,6 @@
 
 // Uncomment to enable debug (or define in platformio.ini)
 // #define EZLINK_DEBUG
-// #define EZLINK_DEBUG_TAG "DBG"
 
 /**
  * EZLink - Simple communication protocol
@@ -174,36 +173,32 @@ public:
 
     /* @brief Constructor with callbacks (always available) */
     explicit EZLink(TxCallback tx, 
-                       RxCallback rx,
-                       uint32_t responseTimeoutMs = EZLinkDfs::DEFAULT_RESPONSE_TIMEOUT_MS
+                       RxCallback rx
                        #ifdef EZLINK_DEBUG
                        , Stream* debugStream = nullptr
-                       , const char* instanceName = ""
+                       , const char* debugTag = ""
                        #endif
                        ): 
         txCallback(tx),
-        rxCallback(rx),
-        responseTimeoutMs(responseTimeoutMs)
+        rxCallback(rx)
         #ifdef EZLINK_DEBUG
         , debugStream(debugStream)
-        , instanceName(instanceName)
+        , debugTag(debugTag)
         #endif
         {
         }
 
     #if defined(ARDUINO)
     /* @brief Arduino constructor (wrapper) */
-    explicit EZLink(HardwareSerial* serial,
-                       uint32_t responseTimeoutMs = EZLinkDfs::DEFAULT_RESPONSE_TIMEOUT_MS
+    explicit EZLink(HardwareSerial* serial
                        #ifdef EZLINK_DEBUG
                        , Stream* debugStream = nullptr
-                       , const char* instanceName = ""
+                       , const char* debugTag = ""
                        #endif
-                       ) :
-        responseTimeoutMs(responseTimeoutMs)
+                       )
         #ifdef EZLINK_DEBUG
-        , debugStream(debugStream)
-        , instanceName(instanceName)
+        : debugStream(debugStream)
+        , debugTag(debugTag)
         #endif
         {
             txCallback = [serial](const uint8_t* data, size_t len) {
@@ -343,15 +338,13 @@ public:
 
             // Send the response automatically
             Result result = sendMsgInternal(resp, true);
+            #ifdef EZLINK_DEBUG
             if (result != SUCCESS) {
-                #ifdef EZLINK_DEBUG
                 debugPrintf("Erreur envoi response ID=0x%02X, code=%d", REQ::id, result.status);
-                #endif
             } else {
-                #ifdef EZLINK_DEBUG
                 debugPrintf("Response ID=0x%02X envoyee avec succes", REQ::id);
-                #endif
             }
+            #endif
         });
     }
 
@@ -588,23 +581,21 @@ private:
     // Attributes
     TxCallback txCallback;                          // Callback for sending frames
     RxCallback rxCallback;                          // Callback for receiving frames
-    uint32_t responseTimeoutMs;                     // Timeout for responses
-    ProtoStore protos[EZLinkDfs::MAX_PROTOS];   // Array of prototypes
+    uint32_t responseTimeoutMs = EZLinkDfs::DEFAULT_RESPONSE_TIMEOUT_MS; // Timeout for responses
+    ProtoStore protos[EZLinkDfs::MAX_PROTOS];       // Array of prototypes
     bool frameCapturePending = false;               // Flag to indicate if a frame is being captured
 
     #ifdef EZLINK_DEBUG
     Stream* debugStream;            // Debug port (optional)
-    const char* instanceName;       // Instance name for logs
+    const char* debugTag;       // Instance name for logs
 
     /* @brief Helper for debug logs
      * @param msg: The message to log */
     void debugPrint(const char* msg) {
         if (debugStream) {
             debugStream->print("[");
-            debugStream->print(EZLINK_DEBUG_TAG);
-            debugStream->print("_");
-            debugStream->print(instanceName);
-            debugStream->print("]: ");
+            debugStream->print(debugTag);
+            debugStream->print("] ");
             debugStream->print(msg);
             debugStream->print("\n");  // Single \n explicit
         }
@@ -621,10 +612,8 @@ private:
             vsnprintf(buffer, sizeof(buffer), format, args);
             va_end(args);
             debugStream->print("[");
-            debugStream->print(EZLINK_DEBUG_TAG);
-            debugStream->print("_");
-            debugStream->print(instanceName);
-            debugStream->print("]: ");
+            debugStream->print(debugTag);
+            debugStream->print("] ");
             debugStream->println(buffer);
         }
     }
@@ -636,14 +625,12 @@ private:
     void debugHexDump(const char* prefix, const uint8_t* data, size_t len) {
         if (!debugStream) return;
         debugStream->print("[");
-        debugStream->print(EZLINK_DEBUG_TAG);
-        debugStream->print("_");
-        debugStream->print(instanceName);
-        debugStream->print("]: ");
+        debugStream->print(debugTag);
+        debugStream->print("] ");
         debugStream->print(prefix);
-        debugStream->print(" [");
+        debugStream->print(" (");
         debugStream->print(len);
-        debugStream->print(" bytes]");
+        debugStream->print("B)");
         
         // Display quick analysis if it's a frame
         if (len >= EZLinkDfs::FRAME_OVERHEAD) {

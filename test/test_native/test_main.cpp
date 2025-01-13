@@ -44,25 +44,25 @@ struct MinimalMsg {
     uint8_t dummy;  // Minimal message of one byte
 } __attribute__((packed));
 
-// Structures pour les tests de ID Request/Response
-struct TestResponseMsg;  // Forward declaration nécessaire car TestRequestMsg y fait référence
+// Structures for ID Request/Response tests
+struct TestResponseMsg;  // Forward declaration needed because TestRequestMsg references it
 
 struct TestRequestMsg {
     static constexpr MsgType type = MsgType::REQUEST;
-    static constexpr uint8_t id = 42;  // ID arbitraire entre 1-127
-    using ResponseType = TestResponseMsg;  // Utilise TestResponseMsg qui doit être déclaré avant
+    static constexpr uint8_t id = 42;  // Arbitrary ID between 1-127
+    using ResponseType = TestResponseMsg;  // Uses TestResponseMsg which must be declared before
     uint8_t data;
 } __attribute__((packed));
 
 struct TestResponseMsg {
     static constexpr MsgType type = MsgType::RESPONSE;
-    static constexpr uint8_t id = 42;  // Même ID que la requête
+    static constexpr uint8_t id = 42;  // Same ID as the request
     uint8_t data;
 } __attribute__((packed));
 
 struct WrongResponseMsg {
     static constexpr MsgType type = MsgType::RESPONSE;
-    static constexpr uint8_t id = 43;  // Different de TestRequestMsg::id !
+    static constexpr uint8_t id = 43;  // Different from TestRequestMsg::id !
     uint8_t data;
 } __attribute__((packed));
 
@@ -83,7 +83,7 @@ private:
     uint8_t autoResponseBuffer[BUFFER_SIZE];
     size_t autoResponseSize;
     int availableForWriteValue;
-    bool autoResponseEnabled = true;  // Par défaut on répond
+    bool autoResponseEnabled = true;  // Default is to respond
 
     void prepareAutoResponse() {
         // We don't prepare auto-response for MESSAGE messages
@@ -92,10 +92,10 @@ private:
         }
         
         if (lastMessageID == SetPwmMsg::id) {
-            // Trouver la taille du message SetPwmMsg
+            // Find the size of the SetPwmMsg message
             size_t msgSize = sizeof(SetPwmMsg) + EZLinkDfs::FRAME_OVERHEAD;
             
-            // Trouver l'offset du message SetPwmMsg dans le buffer
+            // Find the offset of the SetPwmMsg message in the buffer
             size_t offset = 0;
             while (offset < txCount) {
                 if (txBuffer[offset] == EZLinkDfs::START_OF_FRAME && 
@@ -108,7 +108,7 @@ private:
             
             printf("\nMOCK: Preparing ACK response (message size: %zu, offset: %zu)\n", msgSize, offset);
             
-            // 1. Copier uniquement le message SetPwmMsg depuis le bon offset
+            // 1. Copy only the SetPwmMsg message from the correct offset
             memcpy(autoResponseBuffer, txBuffer + offset, msgSize - 1);
             printf("MOCK: Original message (without CRC):");
             for(size_t i = 0; i < msgSize-1; i++) {
@@ -116,7 +116,7 @@ private:
             }
             printf("\n");
             
-            // 2. Mettre le bon ID
+            // 2. Put the correct ID
             autoResponseBuffer[2] = SetPwmMsg::id | EZLinkDfs::ID_RESPONSE_BIT;
             printf("MOCK: Modified message (before CRC):");
             for(size_t i = 0; i < msgSize-1; i++) {
@@ -124,7 +124,7 @@ private:
             }
             printf("\n");
             
-            // 3. Calculer le CRC sur le buffer modifié
+            // 3. Calculate the CRC on the modified buffer
             uint16_t crc = EZLink::calculateCRC16(autoResponseBuffer, msgSize-2);
             autoResponseBuffer[msgSize-2] = (uint8_t)(crc >> 8);    // MSB
             autoResponseBuffer[msgSize-1] = (uint8_t)(crc & 0xFF);  // LSB
@@ -140,7 +140,7 @@ private:
             autoResponseSize = msgSize;
         }
         else if (lastMessageID == GetStatusMsg::id) {
-            // Pour REQUEST/RESPONSE, on construit une réponse avec ID | EZLinkDfs::ID_RESPONSE_BIT
+            // For REQUEST/RESPONSE, build a response with ID | EZLinkDfs::ID_RESPONSE_BIT
             StatusResponseMsg resp{.state = 1, .uptime = 1000};
             
             // Build the response frame
@@ -272,7 +272,7 @@ public:
     void enableAutoResponse() { autoResponseEnabled = true; }
 };
 
-// Variable globale pour le mock (accessible dans setUp/tearDown)
+// Global variable for the mock (accessible in setUp/tearDown)
 static MockSerial* currentMock = nullptr;
 
 void setUp(void) {
@@ -284,7 +284,7 @@ void tearDown(void) {
 
 void test_register_proto(void) {
     MockSerial serial;
-    serial.reset();  // Stockage du mock
+    serial.reset();  // Store the mock
     EZLink comm(&serial);
 
     // Test 1: Normal registration
@@ -298,7 +298,7 @@ void test_register_proto(void) {
 
 void test_send_msg(void) {
     MockSerial serial;
-    serial.reset();  // Stockage du mock
+    serial.reset();  // Store the mock
     EZLink comm(&serial);
     
     // Register the proto first
@@ -359,22 +359,22 @@ void test_timeout(void) {
     
     comm.registerRequest<SetPwmMsg>();
     
-    // Désactiver l'auto-réponse
+    // Disable auto-response
     serial.disableAutoResponse();
     
-    // Envoyer un message qui nécessite une réponse
+    // Send a message that requires a response
     SetPwmMsg msg{.pin = 1, .freq = 1000};
     
-    // Test 1: Pas de réponse du tout
+    // Test 1: No response at all
     auto result = comm.sendMsgAck(msg);
     TEST_ASSERT_EQUAL(EZLink::ERR_RCV_TIMEOUT, result.status);
     
-    // Test 2: Réponse partielle
+    // Test 2: Partial response
     uint8_t partialResponse[] = {
         EZLinkDfs::START_OF_FRAME,
         sizeof(SetPwmMsg) + EZLinkDfs::FRAME_OVERHEAD,
         SetPwmMsg::id | EZLinkDfs::ID_RESPONSE_BIT,
-        // Manque les données et le CRC
+        // Missing data and CRC
     };
     serial.injectData(partialResponse, sizeof(partialResponse));
     
@@ -515,7 +515,7 @@ void test_size_limits(void) {
     serial.reset();
     EZLink comm(&serial);
     
-    // Test message minimal
+    // Test minimal message
     auto result = comm.registerRequest<MinimalMsg>();
     TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
@@ -544,7 +544,7 @@ void test_malformed_frames(void) {
         sizeof(SetLedMsg) + EZLinkDfs::FRAME_OVERHEAD + 1,  // Too long
         SetLedMsg::id,
         1,
-        0,    // Données supplémentaires pour atteindre la taille annoncée
+        0,    // Additional data to reach the announced size
         0, 0  // CRC
     };
     uint16_t crc = EZLink::calculateCRC16(wrongLenFrame, sizeof(wrongLenFrame)-2);
@@ -678,7 +678,7 @@ void test_response_id_calculation() {
     serial.reset();
     EZLink comm(&serial);
     
-    // Enregistrer la paire request/response
+    // Register the request/response pair
     auto result = comm.registerRequest<TestRequestMsg>();
     TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
@@ -695,11 +695,11 @@ void test_response_wrong_id() {
     serial.reset();
     EZLink comm(&serial);
     
-    // La requête doit passer
+    // The request must pass
     auto result = comm.registerRequest<TestRequestMsg>();
     TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
-    // La réponse avec mauvais ID doit être rejetée
+    // The response with wrong ID must be rejected
     result = comm.registerResponse<WrongResponseMsg>();
     TEST_ASSERT_NOT_EQUAL(EZLink::SUCCESS, result.status);
 }
@@ -736,18 +736,18 @@ void test_busy_receiving(void) {
     serial.reset();
     EZLink comm(&serial);
     
-    // Enregistrer les protos nécessaires
+    // Register the necessary protos
     comm.registerRequest<SetLedMsg>();  // MESSAGE
     
-    // Préparer un message incomplet pour simuler une réception en cours
+    // Prepare an incomplete message to simulate an ongoing reception
     uint8_t partialFrame[] = {
         EZLinkDfs::START_OF_FRAME,  // SOF
         sizeof(SetLedMsg) + EZLinkDfs::FRAME_OVERHEAD,  // LEN
         SetLedMsg::id,  // ID
-        // On n'injecte pas tout le message pour simuler une réception partielle
+        // Don't inject the whole message to simulate a partial reception
     };
     
-    // Injecter le début de frame
+    // Inject the start of frame
     printf("\nTEST: Injecting partial frame:");
     for(size_t i = 0; i < sizeof(partialFrame); i++) {
         printf(" %02X", partialFrame[i]);
@@ -755,15 +755,15 @@ void test_busy_receiving(void) {
     printf("\n");
     serial.injectData(partialFrame, sizeof(partialFrame));
     
-    // Premier poll() pour démarrer la capture
+    // First poll() to start the capture
     printf("TEST: Starting frame capture...\n");
     auto result = comm.poll();
     printf("TEST: Poll result: status=%d, id=%d\n", result.status, result.id);
     
-    // Essayer d'envoyer un message pendant la capture
+    // Try to send a message while capturing
     printf("TEST: Trying to send while capturing...\n");
     SetLedMsg msg{.state = 1};
-    result = comm.sendMsg(msg);  // MESSAGE ne nettoie pas le buffer
+    result = comm.sendMsg(msg);  // MESSAGE doesn't clear the buffer
     printf("TEST: Send result: status=%d, id=%d\n", result.status, result.id);
     TEST_ASSERT_EQUAL(EZLink::ERR_BUSY_RECEIVING, result.status);
 }
@@ -773,23 +773,23 @@ void test_request_during_response_wait() {
     serial.reset();
     EZLink comm(&serial);
     
-    // Enregistrer les messages
+    // Register the messages
     comm.registerRequest<GetStatusMsg>();
     comm.registerResponse<StatusResponseMsg>();
     comm.registerRequest<SetLedMsg>();
     
-    // Préparer les messages
+    // Prepare the messages
     GetStatusMsg statusReq{};
     StatusResponseMsg statusResp{};
     
-    // Désactiver l'auto-réponse pour contrôler la séquence
+    // Disable auto-response to control the sequence
     serial.disableAutoResponse();
     
-    // 1. Envoyer une requête de status
+    // 1. Send a status request
     printf("\nSending status request...\n");
     auto result = comm.sendRequest(statusReq, statusResp);  // Non bloquant car pas de réponse
     
-    // 2. Pendant qu'on attend la réponse, on reçoit une requête LED
+    // 2. While waiting for the response, receive a LED request
     uint8_t incomingRequest[] = {
         EZLinkDfs::START_OF_FRAME,
         sizeof(SetLedMsg) + EZLinkDfs::FRAME_OVERHEAD,
@@ -804,19 +804,19 @@ void test_request_during_response_wait() {
     printf("Injecting LED request while waiting for status response...\n");
     serial.injectData(incomingRequest, sizeof(incomingRequest));
     
-    // 3. Le poll() doit traiter la requête LED normalement
+    // 3. The poll() must process the LED request normally
     result = comm.poll();
     TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     TEST_ASSERT_EQUAL(SetLedMsg::id, result.id);
     
-    // 4. Maintenant on reçoit la réponse de status (tardive)
+    // 4. Now receive the status response (late)
     uint8_t lateResponse[] = {
         EZLinkDfs::START_OF_FRAME,
         sizeof(StatusResponseMsg) + EZLinkDfs::FRAME_OVERHEAD,
         StatusResponseMsg::id | EZLinkDfs::ID_RESPONSE_BIT,
         0x01,  // state = 1
         0x00, 0x00, 0x00, 0x00,  // uptime = 0
-        0, 0   // CRC à calculer
+        0, 0   // CRC to calculate
     };
     crc = EZLink::calculateCRC16(lateResponse, sizeof(lateResponse)-2);
     lateResponse[sizeof(lateResponse)-2] = (uint8_t)(crc >> 8); // MSB
@@ -825,7 +825,7 @@ void test_request_during_response_wait() {
     printf("Injecting late status response...\n");
     serial.injectData(lateResponse, sizeof(lateResponse));
     
-    // 5. Le poll() doit rejeter la réponse tardive
+    // 5. The poll() must reject the late response
     result = comm.poll();
     TEST_ASSERT_EQUAL(EZLink::ERR_RCV_UNEXPECTED_RESPONSE, result.status);
 }
@@ -833,16 +833,16 @@ void test_request_during_response_wait() {
 int main(void) {
     UNITY_BEGIN();
     
-    // Tests d'enregistrement et validation des protos
+    // Registration and proto validation tests
     RUN_TEST(test_register_proto);
     
-    // Tests de communication basique
+    // Basic communication tests
     RUN_TEST(test_send_msg);
     RUN_TEST(test_on_receive);
     RUN_TEST(test_send_msg_with_ack);
     RUN_TEST(test_request_response);
     
-    // Tests de gestion des erreurs et limites
+    // Error and limit tests
     RUN_TEST(test_error_cases);
     RUN_TEST(test_buffer_limits);
     RUN_TEST(test_timeout);
@@ -850,15 +850,15 @@ int main(void) {
     RUN_TEST(test_size_limits);
     RUN_TEST(test_malformed_frames);
     
-    // Tests de données
+    // Data tests
     RUN_TEST(test_complex_data);
     
-    // Tests de robustesse
+    // Robustness tests
     RUN_TEST(test_stress);
     RUN_TEST(test_mixed_message_types);
     RUN_TEST(test_busy_receiving);
 
-    // Tests spécifiques Request/Response
+    // Specific Request/Response tests
     RUN_TEST(test_response_id_calculation);
     RUN_TEST(test_response_wrong_id);
     RUN_TEST(test_request_during_response_wait);
