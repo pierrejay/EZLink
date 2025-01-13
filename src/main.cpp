@@ -26,7 +26,7 @@ struct LogMessage {
     char buffer[MAX_LOG_MSG_SIZE];
 };
 
-// Log task
+// Log task polling log queue & sending to USB
 void logTask(void* parameter) {
     LogMessage msg;
     while(true) {
@@ -37,14 +37,13 @@ void logTask(void* parameter) {
     }
 }
 
-// Log helpers protected by mutex
+// Log helpers sending to log queue
 void log(const char* message) {
     LogMessage msg;
     snprintf(msg.buffer, sizeof(msg.buffer), "%s\n", message);
     msg.buffer[MAX_LOG_MSG_SIZE-1] = '\0';
     xQueueSend(logQueue, &msg, portMAX_DELAY);
 }
-
 void logf(const char* format, ...) {
     LogMessage msg;
     va_list args;
@@ -55,7 +54,7 @@ void logf(const char* format, ...) {
     xQueueSend(logQueue, &msg, portMAX_DELAY);
 }
 
-// Custom stream that uses our thread-safe log functions
+// Custom stream that uses our thread-safe log functions to catch hexdumps from EZLink
 class ThreadSafeLogStream : public Stream {
 private:
     static constexpr size_t BUFFER_SIZE = 256;
@@ -214,12 +213,12 @@ void masterTask(void* parameter) {
             case TEST_FIRE_AND_FORGET: {
                 log("\n=== Test FIRE_AND_FORGET ===");
                 SetLedMsg msg{.state = 1};
-                logf("MASTER: Tentative envoi message LED, etat=%d", msg.state);
+                logf("MASTER: Attempting to send LED message, state=%d", msg.state);
                 
                 testInProgress = true;
                 auto result = master.sendMsg(msg);
                 if(result != EZLink::SUCCESS) {
-                    logf("MASTER: Erreur envoi LED, code=%d", result.status);
+                    logf("MASTER: Error sending LED message, code=%d", result.status);
                     txRxStats.masterErrors.txErrors++;
                 } else {
                     txRxStats.messagesSent++;
@@ -234,7 +233,7 @@ void masterTask(void* parameter) {
             case TEST_ACK_REQUIRED: {
                 log("\n=== Test ACK_REQUIRED ===");
                 SetPwmMsg msg{.pin = 1, .freq = 1000};
-                logf("MASTER: Tentative envoi message PWM, pin=%d, freq=%lu", msg.pin, msg.freq);
+                logf("MASTER: Attempting to send PWM message, pin=%d, freq=%lu", msg.pin, msg.freq);
                 
                 testInProgress = true;
                 unsigned long startTime = millis();  // Capture time before sending
@@ -273,7 +272,7 @@ void masterTask(void* parameter) {
                 GetStatusMsg req{};
                 StatusResponseMsg resp{};
                 
-                log("MASTER: Tentative envoi requete status");
+                log("MASTER: Attempting to send status request");
                 
                 testInProgress = true;
                 unsigned long startTime = millis();  // Capture time before sending
