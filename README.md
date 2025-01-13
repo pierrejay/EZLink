@@ -2,7 +2,7 @@
 
 > *Lightweight, robust & user-friendly messaging library for secure structured communication between microcontrollers*
 
-# Table of Contents
+## Table of Contents
 
 - [Introduction](#introduction)
 - [EZLink Minimal Example](#ezlink-minimal-example)
@@ -183,8 +183,8 @@ This can be done directly in your source code, but the best practice is to do th
 
 #### Naming & ID Rules
 - Each proto struct declares:  
-  - `static constexpr MsgType type;` (see above)
-  - `static constexpr uint8_t id;` (must be in **1..127**).  
+  - Message type: `static constexpr MsgType type;` (see above)
+  - Message ID: `static constexpr uint8_t id;` (must be in **1..127**).  
 
 - Basic rules:
   - `id=0` is invalid.  
@@ -265,7 +265,10 @@ EZLink comm(&Serial1,      // Communication serial port
 ```
 
 #### Custom Transport Usage
-For non-Arduino environments, provide your own TX/RX callbacks:
+For non-Arduino environments, provide your own TX/RX callbacks, with the following signatures:
+- `std::function<size_t(const uint8_t*, size_t)>` for TX
+- `std::function<size_t(uint8_t*, size_t)>` for RX
+
 ```cpp
 // Define callbacks
 EZLink::TxCallback txCb = [](const uint8_t* data, size_t len) {
@@ -296,6 +299,7 @@ This method is here only to clear the RX buffer since garbage can be present rig
 For the communication to work properly, you must:
 1. Register all messages you want to send with `registerRequest<T>()`
 2. Register all responses you expect to receive with `registerResponse<T>()`
+
 This must be done after instantiating the `EZLink` object.
 
 #### Order of Registration
@@ -607,11 +611,11 @@ Under `examples/esp-idf/`:
 - Illustrates using `EZLink` in a typical ESP-IDF project, with non-Arduino drivers.
 
 ## License
-This library is released under the [MIT License](./LICENSE) (if applicable). Feel free to use and modify it to suit your needs.
+This library is released under the [MIT License](./LICENSE). Feel free to use and modify it to suit your needs.
 
 ## Final Notes
-**EZLink**’s approach is intentionally **minimalistic**, but it offers enough structure to avoid “reinventing the wheel” each time you need robust UART-based message handling. With compile-time validation, CRC checks, and straightforward message definitions, you can focus on **business logic** rather than protocol plumbing.
+EZLink’s approach is intentionally minimalistic, but it offers enough structure to avoid “reinventing the wheel” each time you need robust UART-based message handling. With compile-time validation, CRC checks, and straightforward message definitions, you can focus on business logic rather than protocol plumbing.
 
 If you encounter issues or have feature requests, please open an issue or PR on the repo! I'll be happy to get feedback and contributions to improve the library.
 
-**Happy hacking!** 
+Happy hacking!
