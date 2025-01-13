@@ -10,36 +10,41 @@
 #define UART2_RX D7
 #define UART2_TX D8
 
-// Délai de poll pour le slave
+// Polling delay for slave
 #define SLAVE_DELAY_MS 10
 
-EZLink master(&Serial1, 500, &Serial, "MASTER");
-EZLink slave(&Serial2, 500, &Serial, "SLAVE");
+#ifdef EZLINK_DEBUG
+EZLink master(&Serial1, &Serial, "DBG_MASTER");
+EZLink slave(&Serial2, &Serial, "DBG_SLAVE");
+#else
+EZLink master(&Serial1);
+EZLink slave(&Serial2);
+#endif
 
 TaskHandle_t slaveTask = NULL;
 
-// Message avec payload maximum
+// Message with maximum payload
 struct MaxPayloadMsg {
     static constexpr MsgType type = MsgType::MESSAGE;
     static constexpr uint8_t id = 10;
-    uint8_t data[EZLinkDfs::MAX_FRAME_SIZE - EZLinkDfs::FRAME_OVERHEAD];  // Taille maximale possible
+    uint8_t data[EZLinkDfs::MAX_FRAME_SIZE - EZLinkDfs::FRAME_OVERHEAD];  // Maximum possible
 } __attribute__((packed));
 
-// Message avec payload vide
+// Message with empty payload
 struct EmptyMsg {
     static constexpr MsgType type = MsgType::MESSAGE;
     static constexpr uint8_t id = 11;
-    // Pas de données !
+    // No data !
 } __attribute__((packed));
 
-// Message pour test en rafale
+// Message for burst test
 struct BurstMsg {
-    static constexpr MsgType type = MsgType::MESSAGE_ACK;  // On utilise ACK pour vérifier la réception
+    static constexpr MsgType type = MsgType::MESSAGE_ACK;  // Use ACK to verify reception
     static constexpr uint8_t id = 12;
-    uint32_t sequence;  // Numéro de séquence pour vérifier l'ordre
+    uint32_t sequence;  // Sequence number to verify order
 } __attribute__((packed));
 
-// Messages pour test bidirectionnel
+// Messages for bidirectional test
 struct PongMsg {
     static constexpr MsgType type = MsgType::RESPONSE;
     static constexpr uint8_t id = 13;
@@ -54,21 +59,21 @@ struct PingMsg {
     using ResponseType = PongMsg;
 } __attribute__((packed));
 
-// Fonction utilitaire pour envoyer une frame personnalisée
+// Utility function to send a custom frame
 void sendCustomFrame(HardwareSerial* serial, uint8_t sof, uint8_t len, uint8_t id, const std::vector<uint8_t>& payload, uint16_t crc = 0) {
-    // Construire la frame sans CRC
+    // Build frame without CRC
     std::vector<uint8_t> frame;
     frame.push_back(sof);
     frame.push_back(len);
     frame.push_back(id);
     frame.insert(frame.end(), payload.begin(), payload.end());
 
-    // Si crc == 0, on le calcule sur la frame complète
+    // If crc == 0, calculate it on the full frame
     if(crc == 0) {
         crc = EZLink::calculateCRC16(frame.data(), frame.size());
     }
     
-    // Ajouter le CRC
+    // Add CRC
     frame.push_back(static_cast<uint8_t>(crc >> 8));
     frame.push_back(static_cast<uint8_t>(crc & 0xFF));
 
@@ -104,14 +109,14 @@ void testsInit() {
 void startSlaveTask() {
     xTaskCreatePinnedToCore(
         [](void* parameter) {
-            Serial.println("Tâche slave démarrée");
+            Serial.println("Slave task started");
             while(true) {
                 auto result = slave.poll();
                 if(result == EZLink::SUCCESS) {
-                    Serial.println("Slave: message traité");
+                    Serial.println("Slave: message processed");
                 }
                 else if(result != EZLink::NOTHING_TO_DO) {
-                    Serial.printf("Slave: erreur poll %d\n", result.status);
+                    Serial.printf("Slave: poll error %d\n", result.status);
                 }
                 vTaskDelay(pdMS_TO_TICKS(SLAVE_DELAY_MS));
             }
@@ -209,20 +214,20 @@ void test_request_response() {
 
 }
 
-// Les tests de robustesse
+// Robustness tests
 void test_max_payload() {
     Serial.println("Début test_max_payload");
     
-    // Enregistrer les messages pour ce test
+    // Register messages for this test
     master.registerRequest<MaxPayloadMsg>();
     slave.registerRequest<MaxPayloadMsg>();
     
-    startSlaveTask();  // Démarrer la tâche slave
+    startSlaveTask();  // Start slave task
     
     bool messageReceived = false;
     MaxPayloadMsg msg;
     
-    // Remplir le payload avec un pattern reconnaissable
+    // Fill payload with a recognizable pattern
     for(size_t i = 0; i < sizeof(msg.data); i++) {
         msg.data[i] = i & 0xFF;
     }
@@ -230,7 +235,7 @@ void test_max_payload() {
     // Setup handler
     slave.onReceive<MaxPayloadMsg>([&messageReceived, &msg](const MaxPayloadMsg& received) {
         messageReceived = true;
-        // Vérifier que le pattern est intact
+        // Verify pattern is intact
         for(size_t i = 0; i < sizeof(msg.data); i++) {
             TEST_ASSERT_EQUAL(i & 0xFF, received.data[i]);
         }
@@ -239,14 +244,14 @@ void test_max_payload() {
     auto result = master.sendMsg(msg);
     TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
-    delay(50);  // Laisser le temps au slave de traiter
+    delay(50);  // Give some time for slave to process
     TEST_ASSERT_TRUE(messageReceived);
 }
 
 void test_empty_payload() {
     Serial.println("Début test_empty_payload");
     
-    // Enregistrer les messages pour ce test
+    // Register messages for this test
     master.registerRequest<EmptyMsg>();
     slave.registerRequest<EmptyMsg>();
     
@@ -269,7 +274,7 @@ void test_empty_payload() {
 void test_burst_messages() {
     Serial.println("Début test_burst_messages");
     
-    // Enregistrer les messages pour ce test
+    // Register messages for this test
     master.registerRequest<BurstMsg>();
     slave.registerRequest<BurstMsg>();
     
@@ -283,22 +288,22 @@ void test_burst_messages() {
         receivedCount++;
     });
     
-    // Envoyer les messages en rafale
+    // Send messages in burst
     for(int i = 0; i < NUM_MESSAGES; i++) {
         BurstMsg msg;
         msg.sequence = i;
-        auto result = master.sendMsgAck(msg);  // On utilise ACK pour s'assurer de la réception
+        auto result = master.sendMsgAck(msg);  // Use ACK to ensure reception
         TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     }
     
-    delay(100);  // Laisser le temps au traitement
+    delay(100);  // Give some time for processing
     TEST_ASSERT_EQUAL(NUM_MESSAGES, receivedCount);
 }
 
 void test_bidirectional() {
     Serial.println("Début test_bidirectional");
     
-    // Enregistrer les messages pour ce test - attention à l'ordre !
+    // Register messages for this test - attention to order !
     master.registerRequest<PingMsg>();
     master.registerResponse<PongMsg>();
     slave.registerRequest<PingMsg>();
@@ -315,7 +320,7 @@ void test_bidirectional() {
     
     const int NUM_PINGS = 5;
     for(int i = 0; i < NUM_PINGS; i++) {
-        // Envoyer un ping
+        // Send a ping
         PingMsg ping;
         ping.timestamp = millis();
         PongMsg pong;
@@ -327,14 +332,14 @@ void test_bidirectional() {
         TEST_ASSERT_GREATER_THAN(0, request_time);
         TEST_ASSERT_GREATER_THAN(request_time, response_time);
         
-        delay(10);  // Petit délai entre les pings
+        delay(10);  // Small delay between pings
     }
 }
 
 void test_response_timeout() {
     Serial.println("Début test_response_timeout");
     
-    // Ne pas démarrer la tâche slave pour simuler un timeout
+    // Don't start slave task to simulate timeout
     GetStatusMsg req;
     StatusResponseMsg resp;
     auto result = master.sendRequest(req, resp);
@@ -345,13 +350,13 @@ void test_response_timeout() {
 void test_corrupted_crc() {
     Serial.println("Début test_corrupted_crc");
     
-    // Le master envoie un message avec CRC invalide au slave
-    std::vector<uint8_t> data = {0x01};  // Exemple de données
-    uint16_t invalidCRC = 0xFFFF;  // CRC invalide
+    // Master sends a message with invalid CRC to slave
+    std::vector<uint8_t> data = {0x01};  // Example data
+    uint16_t invalidCRC = 0xFFFF;  // Invalid CRC
     sendCustomFrame(&Serial1, EZLinkDfs::START_OF_FRAME, data.size() + EZLinkDfs::FRAME_OVERHEAD, data.size(), data, invalidCRC);
     
-    // Le slave doit détecter l'erreur
-    delay(20);  // Laisser le temps à la transmission UART
+    // Slave must detect error
+    delay(20);  // Give some time for UART transmission
     auto result = slave.poll();
     TEST_ASSERT_EQUAL(EZLink::ERR_RCV_CRC, result.status);
 }
@@ -359,25 +364,25 @@ void test_corrupted_crc() {
 void test_truncated_message() {
     Serial.println("Début test_truncated_message");
     
-    // Enregistrer le message pour le test valide
+    // Register message for this test
     master.registerRequest<SetLedMsg>();
     slave.registerRequest<SetLedMsg>();
     
-    // 1. Envoyer un message tronqué : on annonce une longueur de 12 (0x0C) mais on envoie moins
+    // 1. Send a truncated message: announce a length of 12 (0x0C) but send less
     std::vector<uint8_t> truncated_data = {0x01, 0x42};  // ID + payload
     sendCustomFrame(&Serial1, EZLinkDfs::START_OF_FRAME, 0x0C, 0x01, truncated_data, 0);
     
-    // 2. Envoyer un message valide (SetLedMsg)
+    // 2. Send a valid message (SetLedMsg)
     SetLedMsg msg{.state = 1};
     master.sendMsg(msg);
     
     delay(20);
     
-    // 3. Premier poll() doit détecter l'erreur CRC (car il lira des données du message suivant)
+    // 3. First poll() must detect CRC error (it will read data from the next message)
     auto result = slave.poll();
     TEST_ASSERT_EQUAL(EZLink::ERR_RCV_CRC, result.status);
     
-    // 4. Continuer à poller jusqu'à avoir traité tous les messages
+    // 4. Continue polling until all messages are processed
     bool success_found = false;
     while(true) {
         result = slave.poll();
@@ -387,23 +392,23 @@ void test_truncated_message() {
         else if(result.status == EZLink::NOTHING_TO_DO) {
             break;
         }
-        // On ignore les autres erreurs potentielles (invalid SOF etc)
+        // Ignore other potential errors (invalid SOF etc)
     }
     
-    // On doit avoir trouvé au moins un message valide
+    // We must have found at least one valid message
     TEST_ASSERT_TRUE(success_found);
 }
 
 void test_invalid_sof() {
     Serial.println("Début test_invalid_sof");
     
-    // Envoyer un message avec un SOF incorrect
-    std::vector<uint8_t> data = {0x01, 0x02, 0x03};  // Exemple de données
+    // Send a message with invalid SOF
+    std::vector<uint8_t> data = {0x01, 0x02, 0x03};  // Example data
     uint16_t crc = EZLink::calculateCRC16(data.data(), data.size());
     sendCustomFrame(&Serial1, 0x55, data.size() + EZLinkDfs::FRAME_OVERHEAD, data.size(), data, crc);  // SOF incorrect
     
-    // Poller pour vérifier l'erreur
-    delay(20);  // Laisser le temps à la transmission UART
+    // Poll to check error
+    delay(20);  // Give some time for UART transmission
     auto result = slave.poll();
     bool got_invalid_sof = (result.status == EZLink::ERR_RCV_INVALID_SOF);
     TEST_ASSERT_EQUAL(EZLink::ERR_RCV_INVALID_SOF, result.status);
@@ -412,13 +417,13 @@ void test_invalid_sof() {
 void test_invalid_length() {
     Serial.println("Début test_invalid_length");
     
-    // Envoyer un message avec une longueur incorrecte
-    std::vector<uint8_t> data = {0x01, 0x02, 0x03};  // Exemple de données
+    // Send a message with invalid length
+    std::vector<uint8_t> data = {0x01, 0x02, 0x03};  // Example data
     uint16_t crc = EZLink::calculateCRC16(data.data(), data.size());
     sendCustomFrame(&Serial1, EZLinkDfs::START_OF_FRAME, 255, data.size(), data, crc);  // Longueur incorrecte
     
-    // Poller pour vérifier l'erreur
-    delay(20);  // Laisser le temps à la transmission UART
+    // Poll to check error
+    delay(20);  // Give some time for UART transmission
     auto result = slave.poll();
     TEST_ASSERT_EQUAL(EZLink::ERR_RCV_INVALID_LEN, result.status);
 }
@@ -426,12 +431,12 @@ void test_invalid_length() {
 void test_unexpected_response() {
     Serial.println("Début test_unexpected_response");
     
-    // Ici c'est différent : le slave envoie une réponse inattendue au master
-    std::vector<uint8_t> payload = {0x42};  // Données quelconques
-    sendCustomFrame(&Serial2, EZLinkDfs::START_OF_FRAME, 6, 0x81, payload, 0);  // ID avec bit de réponse
+    // Here it's different: slave sends an unexpected response to master
+    std::vector<uint8_t> payload = {0x42};  // Any data
+    sendCustomFrame(&Serial2, EZLinkDfs::START_OF_FRAME, 6, 0x81, payload, 0);  // ID with response bit
     
-    // Le master doit détecter l'erreur
-    delay(20);  // Laisser le temps à la transmission UART
+    // Master must detect error
+    delay(20);  // Give some time for UART transmission
     auto result = master.poll();
     TEST_ASSERT_EQUAL(EZLink::ERR_RCV_UNEXPECTED_RESPONSE, result.status);
 }
@@ -439,25 +444,25 @@ void test_unexpected_response() {
 void test_oversized_message() {
     Serial.println("Début test_oversized_message");
     
-    // Enregistrer le message pour le test valide
+    // Register message for this test
     master.registerRequest<SetLedMsg>();
     slave.registerRequest<SetLedMsg>();
     
-    // 1. Envoyer un message plus long que sa LEN indiquée
-    std::vector<uint8_t> oversized_data = {0x01, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48};  // 8 bytes de données
+    // 1. Send a message longer than its announced LEN
+    std::vector<uint8_t> oversized_data = {0x01, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48};  // 8 bytes of data
     sendCustomFrame(&Serial1, EZLinkDfs::START_OF_FRAME, 0x05, 0x01, oversized_data, 0);  // LEN = 5 mais données plus longues
     
-    // 2. Envoyer un message valide (SetLedMsg)
+    // 2. Send a valid message (SetLedMsg)
     SetLedMsg msg{.state = 1};
     master.sendMsg(msg);
     
     delay(20);
     
-    // 3. Premier poll() doit détecter l'erreur CRC
+    // 3. First poll() must detect CRC error
     auto first_result = slave.poll();
     bool got_crc_error = (first_result.status == EZLink::ERR_RCV_CRC);
 
-    // 4. Continuer à poller jusqu'à avoir traité tous les messages
+    // 4. Continue polling until all messages are processed
     bool success_found = false;
     while(true) {
         auto result = slave.poll();
@@ -468,15 +473,15 @@ void test_oversized_message() {
             break;
         }
         // yield();
-        // On peut avoir plusieurs erreurs CRC avant de trouver le message valide
+        // We can have several CRC errors before finding the valid message
     }
     
-    // Faire les assertions APRÈS la boucle
+    // Make assertions AFTER the loop
     TEST_ASSERT_TRUE(got_crc_error);
     TEST_ASSERT_TRUE(success_found);
 }
 
-// Buffer circulaire simple pour simuler un UART hardware
+// Simple circular buffer to simulate hardware UART
 class MockUartBuffer {
 private:
     static constexpr size_t SIZE = 256;
@@ -513,9 +518,9 @@ void test_custom_callbacks() {
 
     static MockUartBuffer masterToSlave;
     static MockUartBuffer slaveToMaster;
-    TaskHandle_t callbackSlaveTask = NULL;  // Handle local au test
+    TaskHandle_t callbackSlaveTask = NULL;  // Handle local to this test
 
-    // Créer les instances master et slave
+    // Create master and slave instances
     EZLink master(
         [](const uint8_t* data, size_t len) {
             return masterToSlave.write(data, len);
@@ -534,7 +539,7 @@ void test_custom_callbacks() {
         }
     );
 
-    // Enregistrer les messages sur les deux instances
+    // Register messages on both instances
     master.registerRequest<SetLedMsg>();
     master.registerRequest<SetPwmMsg>();
     master.registerRequest<GetStatusMsg>();
@@ -545,7 +550,7 @@ void test_custom_callbacks() {
     slave.registerRequest<GetStatusMsg>();
     slave.registerResponse<StatusResponseMsg>();
 
-    // Configurer les handlers sur le slave
+    // Configure slave handlers
     bool messageLedReceived = false;
     slave.onReceive<SetLedMsg>([&messageLedReceived](const SetLedMsg& msg) {
         messageLedReceived = true;
@@ -561,35 +566,35 @@ void test_custom_callbacks() {
         resp.uptime = 1000;
     });
 
-    // Démarrer la tâche slave spécifique à ce test
+    // Start slave task specific to this test
     xTaskCreatePinnedToCore(
         [](void* parameter) {
             EZLink* slaveInstance = (EZLink*)parameter;
             while(true) {
                 auto result = slaveInstance->poll();
                 if(result == EZLink::SUCCESS) {
-                    Serial.println("Callback slave: message traité");
+                    Serial.println("Callback slave: message processed");
                 }
                 else if(result != EZLink::NOTHING_TO_DO) {
-                    Serial.printf("Callback slave: erreur poll %d\n", result.status);
+                    Serial.printf("Callback slave: poll error %d\n", result.status);
                 }
                 vTaskDelay(pdMS_TO_TICKS(SLAVE_DELAY_MS));
             }
         },
         "callbackSlaveTask",
         10000,
-        &slave,  // Passe l'instance locale
+        &slave,  // Pass local instance
         1,
         &callbackSlaveTask,
         1
     );
 
-    // Test 1: MESSAGE simple
+    // Test 1: simple MESSAGE
     SetLedMsg ledMsg{.state = 1};
     auto resultSendLed = master.sendMsg(ledMsg);
     TEST_ASSERT_EQUAL(EZLink::SUCCESS, resultSendLed.status);
 
-    delay(50);  // Laisser le temps au slave de traiter
+    delay(50);  // Give some time for slave to process
     TEST_ASSERT_TRUE(messageLedReceived);
 
     // Test 2: MESSAGE_ACK
@@ -605,7 +610,7 @@ void test_custom_callbacks() {
     TEST_ASSERT_EQUAL(1, resp.state);
     TEST_ASSERT_EQUAL(1000, resp.uptime);
 
-    // Cleanup spécifique à ce test
+    // Cleanup specific to this test
     if (callbackSlaveTask != NULL) {
         vTaskDelete(callbackSlaveTask);
         callbackSlaveTask = NULL;
@@ -618,18 +623,18 @@ void setup() {
     
     UNITY_BEGIN();
     
-    // Tests de base
+    // Basic tests
     RUN_TEST(test_basic_communication);
     RUN_TEST(test_ack_required);
     RUN_TEST(test_request_response);
     
-    // Tests de robustesse
+    // Robustness tests
     RUN_TEST(test_max_payload);
     RUN_TEST(test_empty_payload);
     RUN_TEST(test_burst_messages);
     RUN_TEST(test_bidirectional);
     
-    // Tests avancés
+    // Advanced tests
     RUN_TEST(test_response_timeout);
     RUN_TEST(test_corrupted_crc);
     RUN_TEST(test_truncated_message);
@@ -638,7 +643,7 @@ void setup() {
     RUN_TEST(test_unexpected_response);
     RUN_TEST(test_oversized_message);
 
-    // Tests avec callbacks custom
+    // Tests with custom callbacks
     RUN_TEST(test_custom_callbacks);
     UNITY_END();
     
