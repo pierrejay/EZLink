@@ -103,7 +103,7 @@ static constexpr uint8_t ID_RESPONSE_BIT = 0x80;  // Bit 7 set for responses
 static constexpr uint8_t ID_MAX_USER = 0x7F;      // Max 127 user-defined ID (1-127)
 // Timeouts & protections
 static constexpr uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // Wait max 500ms for a response
-static constexpr size_t RX_CLEANUP_BYTES_LIMIT = 256;          // Limite pour détecter un flood au cleanup
+static constexpr size_t RX_CLEANUP_BYTES_LIMIT = 256;          // Limit to detect a flood at cleanup
 
 } // namespace EZLinkDfs
 
@@ -475,54 +475,51 @@ public:
         
         // If capture succeeded, check that it's not a response
         if(result == SUCCESS) {
-            
             // Reject responses (bit 7 set)
             if((result.id & EZLinkDfs::ID_RESPONSE_BIT) != 0) {
                 return Error(ERR_RCV_UNEXPECTED_RESPONSE, result.id);
             }
 
-            // Find the proto and check the size
-            ProtoStore* proto = findProto(result.id);
-            if(proto) {
-                // Check that the size matches the proto
-                if(frameLen - EZLinkDfs::FRAME_OVERHEAD != proto->size) {
-                    return Error(ERR_RCV_PROTO_MISMATCH, result.id);
-                }
-                
-                // Call the handler if registered
-                if(proto->hasHandler) {
-                    switch(proto->type) {
-                        case MsgType::REQUEST: {
-                            // For REQUEST messages, handle the response
-                            uint8_t responseBuffer[EZLinkDfs::MAX_FRAME_SIZE - EZLinkDfs::FRAME_OVERHEAD];
-                            proto->handler.onRequest(&rxBuffer[3], responseBuffer);
-                            
-                            // Send response automatically
-                            ProtoStore* responseProto = findProto(result.id | EZLinkDfs::ID_RESPONSE_BIT);
-                            if (responseProto) {
-                                sendMsgInternal(responseBuffer, result.id, responseProto->size, true);
-                            }
-                            break;
-                        }
-                        case MsgType::MESSAGE_ACK:
-                            // Process the message and send the ACK
-                            proto->handler.onReceive(&rxBuffer[3]);
-                            sendFrame(result.id | EZLinkDfs::ID_RESPONSE_BIT, &rxBuffer[3], proto->size);
-                            break;
-                            
-                        case MsgType::MESSAGE:
-                            proto->handler.onReceive(&rxBuffer[3]);
-                            break;
+            // Find the proto and validate size
+            ProtoStore* proto;
+            Result protoCheck = checkProto(result.id, frameLen - EZLinkDfs::FRAME_OVERHEAD, &proto);
+            if(protoCheck != SUCCESS) {
+                return protoCheck;
+            }
 
-                        default:
-                            // Should never happen, types are checked at compilation
-                            break;
+            // Call the handler if registered
+            if(proto->hasHandler) {
+                switch(proto->type) {
+                    case MsgType::REQUEST: {
+                        // For REQUEST messages, handle the response
+                        uint8_t responseBuffer[EZLinkDfs::MAX_FRAME_SIZE - EZLinkDfs::FRAME_OVERHEAD];
+                        proto->handler.onRequest(&rxBuffer[3], responseBuffer);
+                        
+                        // Send response automatically
+                        ProtoStore* responseProto = findProto(result.id | EZLinkDfs::ID_RESPONSE_BIT);
+                        if (responseProto) {
+                            sendMsgInternal(responseBuffer, result.id, responseProto->size, true);
+                        }
+                        break;
                     }
+                    case MsgType::MESSAGE_ACK:
+                        // Process the message and send the ACK
+                        proto->handler.onReceive(&rxBuffer[3]);
+                        sendFrame(result.id | EZLinkDfs::ID_RESPONSE_BIT, &rxBuffer[3], proto->size);
+                        break;
+                        
+                    case MsgType::MESSAGE:
+                        proto->handler.onReceive(&rxBuffer[3]);
+                        break;
+
+                    default:
+                        // Should never happen, types are checked at compilation
+                        break;
                 }
-                // If MESSAGE_ACK but no handler, send the ACK anyway
-                else if(proto->type == MsgType::MESSAGE_ACK) {
-                    sendFrame(result.id | EZLinkDfs::ID_RESPONSE_BIT, &rxBuffer[3], proto->size);
-                }
+            }
+            // If MESSAGE_ACK but no handler, send the ACK anyway
+            else if(proto->type == MsgType::MESSAGE_ACK) {
+                sendFrame(result.id | EZLinkDfs::ID_RESPONSE_BIT, &rxBuffer[3], proto->size);
             }
             return result;
         }
@@ -590,7 +587,7 @@ private:
             void (*onReceive)(const void*);    
             void (*onRequest)(const void*, void*);  
         } handler = {nullptr};
-        bool hasHandler = false;  // Pour savoir si le handler est défini
+        bool hasHandler = false;  // To know if the handler is defined
     };
 
     // Attributes
@@ -701,15 +698,31 @@ private:
         return Success(id);
     }
 
-    /* @brief Check if proto is registered
+    /* @brief Check if proto is registered and validate its properties
      * @param id: The ID of the prototype
+     * @param size: Size to validate
      * @param outProto: The pointer to the proto found (optional)
+     * @param isReceiving: true if checking a received message, false if checking before sending
      * @return Result of the operation */
-    Result checkProto(uint8_t id, ProtoStore** outProto = nullptr) {
+    Result checkProto(uint8_t id, size_t size, ProtoStore** outProto = nullptr, bool isReceiving = false) {
+        if (size == 0) {
+            return Error(isReceiving ? ERR_RCV_INVALID_LEN : ERR_SND_EMPTY_DATA);
+        }
+
         ProtoStore* proto = findProto(id);
         if (proto == nullptr) {
-            return Error(ERR_SND_INVALID_ID, id);
+            return Error(isReceiving ? ERR_RCV_INVALID_ID : ERR_SND_INVALID_ID, id);
         }
+
+        // If size provided, validate it
+        if (size != proto->size) {
+            #ifdef EZLINK_DEBUG
+            debugPrintf("Error: message size mismatch for ID=0x%02X (got %u, expected %u)", 
+                       id, size, proto->size);
+            #endif
+            return Error(isReceiving ? ERR_RCV_PROTO_MISMATCH : ERR_SND_PROTO_MISMATCH, id);
+        }
+
         if(outProto) {
             *outProto = proto;
         }
@@ -726,11 +739,12 @@ private:
         // Define ID, flip if needed (for responses)
         if (flipId) id |= EZLinkDfs::ID_RESPONSE_BIT;
 
-        // Check if proto is registered
-        Result protoCheck = checkProto(id);
+        // Check if proto is registered and validate size
+        ProtoStore* proto;
+        Result protoCheck = checkProto(id, size, &proto);
         if(protoCheck != SUCCESS) {
             #ifdef EZLINK_DEBUG
-            debugPrintf("Erreur validation proto ID=0x%02X, code=%d", id, protoCheck.status);
+            debugPrintf("Error validating proto ID=0x%02X, code=%d", id, protoCheck.status);
             #endif
             return protoCheck;
         }

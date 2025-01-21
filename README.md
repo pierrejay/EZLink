@@ -44,7 +44,6 @@ using MsgType = EZLink::MsgType;
 struct ControlMsg {
     static constexpr MsgType type = MsgType::MESSAGE_ACK;
     static constexpr uint8_t id = 1;
-    
     uint8_t channel;     // Which channel to control
     uint16_t value;      // Control value
     uint8_t flags;       // Control flags
@@ -86,16 +85,19 @@ void loop() {
 
 EZLink slave(&UART);
 
+// Function to process control messages
+void onControlMsg(const void data) {
+    const ControlMsg msg = static_cast<const ControlMsg>(data);
+    processControl(msg->channel, msg->value, msg->flags); // Process received message (business logic)
+}
+
 void setup() {
     UART.begin(115200);
     slave.begin();
     
     // Register message and handler
     slave.registerRequest<ControlMsg>();
-    slave.onReceive<ControlMsg>([](const ControlMsg& msg) {
-        // Process received message
-        processControl(msg.channel, msg.value, msg.flags);
-    }); 
+    slave.onReceive(ControlMsg::id, processControl);
     // Acknowledgment is automatically sent back to the master after processing
 }
 
@@ -131,7 +133,7 @@ That's it! A complete bidirectional communication system in ~50 lines of code.
    - No manual parsing logic; a message is always read/written as a strongly typed C++ struct.
 
 2. **Lightweight & fast**:  
-   - Fits into tight STM32 flash constraints (on the order of 1KB compiled).
+   - Fits into tight STM32 flash constraints (on the order of 2KB compiled w/ 4 message structs).
    - Ultra-low latency communications.
 
 3. **Full Safety by Default**:  
@@ -331,11 +333,11 @@ The library uses C-style function pointers for maximum efficiency. Handlers are 
 - **For `MESSAGE` or `MESSAGE_ACK`**:  
   ```cpp
   void handleLedMessage(const void* data) {
-      const SetLedMsg* msg = static_cast<const SetLedMsg*>(data);
-      digitalWrite(LED_BUILTIN, msg->state);
+      const SetLedMsg* msg = static_cast<const SetLedMsg*>(data); // Capture the message
+      digitalWrite(LED_BUILTIN, msg->state);                      // Utilize message data
   }
   
-  // Register handler
+  // Register prototype and handler
   comm.registerRequest<SetLedMsg>();
   comm.onReceive(SetLedMsg::id, handleLedMessage);
   ```
@@ -343,23 +345,23 @@ The library uses C-style function pointers for maximum efficiency. Handlers are 
 - **For `REQUEST/RESPONSE` pairs**:  
   ```cpp
   void handleStatusRequest(const void* data, void* respData) {
-    const GetStatusMsg* req = static_cast<const GetStatusMsg*>(data);
-    StatusResponseMsg* resp = static_cast<StatusResponseMsg*>(respData);
+    const GetStatusMsg* req = static_cast<const GetStatusMsg*>(data);     // Capture the request
+    StatusResponseMsg* resp = static_cast<StatusResponseMsg*>(respData);  // Create the response
     
     // Fill response
     resp->uptime = millis();
     resp->state = getSystemState();
+
+    // Response is sent automatically by the library after the callback returns
   }
 
-  // Register handler
+  // Register prototypes and handler
   comm.registerRequest<GetStatusMsg>();
   comm.registerResponse<StatusResponseMsg>();
   comm.onRequest(GetStatusMsg::id, handleStatusRequest);
   ```
 
 Callbacks will be automatically called by the library when a matching message is received.
-
-*Note:* Unlike `std::function`, C function pointers cannot capture variables (no lambdas). While this reduces flexibility slightly, it results in significantly smaller code size.
 
 ```
 
@@ -377,7 +379,8 @@ if (result != EZLink::SUCCESS) {
 
 #### Sending Acknowledged Messages (`MESSAGE_ACK`)
 ```cpp
-SetPwmMsg pwmMsg{.pin = 5, .freq = 1000};
+SetPwmMsg pwmMsg{.pin = 5, 
+                 .freq = 1000};
 auto result = comm.sendMsgAck(pwmMsg); 
 if (result != EZLink::SUCCESS) {
   // handle error, e.g., ERR_RCV_TIMEOUT
@@ -403,10 +406,11 @@ else {
 - Like `MESSAGE_ACK`, it blocks waiting for the correct `RESPONSE`.  
 - On the receiver side:
   ```cpp
-  comm.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp){
-      resp.state = 1;
-      resp.uptime = millis();
-  });
+void handleStatusRequest(const GetStatusMsg& req, StatusResponseMsg& resp){ 
+    resp.state = 1;
+    resp.uptime = millis();
+}
+comm.onRequest(GetStatusMsg::id, handleStatusRequest);
   ```
 - Reponse is sent after executing the receiver's `onRequest` callback : when a response is received, the sender is sure that the receiver is ready to process the next incoming request.
 
