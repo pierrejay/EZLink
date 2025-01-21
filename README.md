@@ -363,8 +363,6 @@ The library uses C-style function pointers for maximum efficiency. Handlers are 
 
 Callbacks will be automatically called by the library when a matching message is received.
 
-```
-
 ### 6. Sending & Receiving Messages
 
 #### Sending One-Way Messages (`MESSAGE`)
@@ -403,15 +401,16 @@ else {
   // error handling
 }
 ```
+
 - Like `MESSAGE_ACK`, it blocks waiting for the correct `RESPONSE`.  
 - On the receiver side:
-  ```cpp
-void handleStatusRequest(const GetStatusMsg& req, StatusResponseMsg& resp){ 
-    resp.state = 1;
-    resp.uptime = millis();
-}
-comm.onRequest(GetStatusMsg::id, handleStatusRequest);
-  ```
+```cpp
+  void handleStatusRequest(const GetStatusMsg& req, StatusResponseMsg& resp){ 
+      resp.state = 1;
+      resp.uptime = millis();
+  }
+  comm.onRequest(GetStatusMsg::id, handleStatusRequest);
+```
 - Reponse is sent after executing the receiver's `onRequest` callback : when a response is received, the sender is sure that the receiver is ready to process the next incoming request.
 
 
