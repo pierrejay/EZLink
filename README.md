@@ -23,7 +23,7 @@
 The library is built around message structs that serve as message prototypes. You simply declare these structs in a declarative way using native C++ types, and the library handles all the framing, encoding, decoding and validation automatically. Think of it as a very lightweight alternative to Protobuf, combined with a robust transport layer that handles message framing and validation. All of this using simple C++ structs that double as both message definitions and instances, making the protocol self-documenting and easy to maintain.
 
 Key design points:
-- Minimal Flash/RAM footprint (as low as ~2KB code size, optimization WIP): suitable for the most constrained microcontrollers such as `STM32F03x` series.
+- Minimal Flash/RAM footprint (~1KB code size + ~300B/message): suitable for the most constrained microcontrollers such as `STM32F03x` series.
 - Simple API with a strong focus on reliability and explicit error reporting. 
 - User-friendly, declarative approach to define message prototypes. 
 - Built-in support for **messages** (one-way), **acknowledged messages**, and **request/response** flows.  
@@ -32,8 +32,6 @@ Key design points:
 - Works seamlessly on **Arduino** platforms or via custom TX/RX callbacks on bare-metal/RTOS-based firmware as long as your target supports C++11.
 
 Whether you are building a Master/Slave setup over UART or need robust bidirectional communications, **EZLink** aims to keep things **KISS** (Keep It Simple, Stupid) while maximizing runtime safety (CRC checks, well-defined message boundaries, error codes, etc.).
-
-Note: the current implementation is fully tested and functional, but work is still in progress to improve the software. I am currently focused on further reducing code size. The template approach generates lots of duplicate code, taking up ~500B of flash memory for each additional registered message prototype. Serializing message structures earlier in the process should further reduce it down to less than 1KB + ~150B per message prototype.
 
 ## EZLink Minimal Example
 
@@ -133,7 +131,7 @@ That's it! A complete bidirectional communication system in ~50 lines of code.
    - No manual parsing logic; a message is always read/written as a strongly typed C++ struct.
 
 2. **Lightweight & fast**:  
-   - Fits into tight STM32 flash constraints (on the order of 2KB compiled).
+   - Fits into tight STM32 flash constraints (on the order of 1KB compiled).
    - Ultra-low latency communications.
 
 3. **Full Safety by Default**:  
@@ -328,37 +326,41 @@ Each message type has specific registration requirements:
 ### 5. Defining Callbacks & Handlers
 After registering your messages and responses, you can attach callbacks that will trigger an action upon reception of a message or request (for example in the `setup()` function if you're using the Arduino framework).
 
+The library uses C-style function pointers for maximum efficiency. Handlers are registered this way:
+
 - **For `MESSAGE` or `MESSAGE_ACK`**:  
   ```cpp
+  void handleLedMessage(const void* data) {
+      const SetLedMsg* msg = static_cast<const SetLedMsg*>(data);
+      digitalWrite(LED_BUILTIN, msg->state);
+  }
+  
+  // Register handler
   comm.registerRequest<SetLedMsg>();
-  comm.onReceive<SetLedMsg>([](const SetLedMsg& msg) { 
-      /* handle message received */ 
-  });
+  comm.onReceive(SetLedMsg::id, handleLedMessage);
   ```
 
 - **For `REQUEST/RESPONSE` pairs**:  
   ```cpp
-  // Register both request and response
+  void handleStatusRequest(const void* data, void* respData) {
+    const GetStatusMsg* req = static_cast<const GetStatusMsg*>(data);
+    StatusResponseMsg* resp = static_cast<StatusResponseMsg*>(respData);
+    
+    // Fill response
+    resp->uptime = millis();
+    resp->state = getSystemState();
+  }
+
+  // Register handler
   comm.registerRequest<GetStatusMsg>();
   comm.registerResponse<StatusResponseMsg>();
-  
-  // Then setup the request handler
-  comm.onRequest<GetStatusMsg>([](
-      const GetStatusMsg& req, 
-      StatusResponseMsg& resp
-  ) { 
-      /* handle request & fill response */ 
-  });
+  comm.onRequest(GetStatusMsg::id, handleStatusRequest);
   ```
 
 Callbacks will be automatically called by the library when a matching message is received.
 
-Example:
-```cpp
-slave.registerRequest<SetLedMsg>();
-slave.onReceive<SetLedMsg>([](const SetLedMsg& msg) {
-    digitalWrite(LED_BUILTIN, msg.state); 
-});
+*Note:* Unlike `std::function`, C function pointers cannot capture variables (no lambdas). While this reduces flexibility slightly, it results in significantly smaller code size.
+
 ```
 
 ### 6. Sending & Receiving Messages
