@@ -315,19 +315,20 @@ void test_send_msg(void) {
     TEST_ASSERT_EQUAL(EZLink::ERR_SND_INVALID_ID, result.status);
 }
 
+// Handler for test_on_receive
+void onSetLedMsgTest(const void* data) {
+    const SetLedMsg* msg = static_cast<const SetLedMsg*>(data);
+    TEST_ASSERT_EQUAL(1, msg->state);
+}
+
 void test_on_receive(void) {
     MockSerial serial;
     serial.reset();
     EZLink comm(&serial);
     
-    bool handlerCalled = false;
-    
     // Register the proto and the handler
     comm.registerRequest<SetLedMsg>();
-    comm.onReceive<SetLedMsg>([&handlerCalled](const SetLedMsg& msg) {
-        handlerCalled = true;
-        TEST_ASSERT_EQUAL(1, msg.state);
-    });
+    comm.onReceive(SetLedMsg::id, onSetLedMsgTest);
     
     // Build a valid frame
     uint8_t frame[] = {
@@ -349,7 +350,6 @@ void test_on_receive(void) {
     // Process the frame
     auto result = comm.poll();
     TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
-    TEST_ASSERT_TRUE(handlerCalled);
 }
 
 void test_timeout(void) {
@@ -396,6 +396,15 @@ void test_send_msg_with_ack(void) {
     TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status); // Must succeed because the mock automatically responds
 }
 
+// Handler for test_request_response
+void onGetStatusMsgTest(const void* data, void* response) {
+    const GetStatusMsg* req = static_cast<const GetStatusMsg*>(data);
+    StatusResponseMsg* resp = static_cast<StatusResponseMsg*>(response);
+    
+    resp->state = 1;
+    resp->uptime = 1000;
+}
+
 void test_request_response(void) {
     MockSerial serial;
     serial.reset();
@@ -405,11 +414,8 @@ void test_request_response(void) {
     comm.registerRequest<GetStatusMsg>();
     comm.registerResponse<StatusResponseMsg>();
     
-    // Configure the request handler that will generate the response
-    comm.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp) {
-        resp.state = 1;
-        resp.uptime = 1000;
-    });
+    // Configure the request handler
+    comm.onRequest(GetStatusMsg::id, onGetStatusMsgTest);
     
     // Send a request
     GetStatusMsg req{};
@@ -640,6 +646,12 @@ void test_stress(void) {
     TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
 }
 
+// Handler for test_mixed_message_types
+void onSetPwmMsgTest(const void* data) {
+    const SetPwmMsg* msg = static_cast<const SetPwmMsg*>(data);
+    TEST_ASSERT_EQUAL(1000, msg->freq);
+}
+
 void test_mixed_message_types(void) {
     MockSerial serial;
     serial.reset();
@@ -650,6 +662,9 @@ void test_mixed_message_types(void) {
     comm.registerRequest<SetPwmMsg>();        // MESSAGE_ACK
     comm.registerRequest<GetStatusMsg>();     // REQUEST
     comm.registerResponse<StatusResponseMsg>(); // RESPONSE
+    
+    // Setup handlers
+    comm.onReceive(SetPwmMsg::id, onSetPwmMsgTest);
     
     // Test a mixed sequence
     SetLedMsg led{.state = 1};

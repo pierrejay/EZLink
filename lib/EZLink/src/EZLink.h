@@ -103,7 +103,7 @@ static constexpr uint8_t ID_RESPONSE_BIT = 0x80;  // Bit 7 set for responses
 static constexpr uint8_t ID_MAX_USER = 0x7F;      // Max 127 user-defined ID (1-127)
 // Timeouts & protections
 static constexpr uint32_t DEFAULT_RESPONSE_TIMEOUT_MS = 500;   // Wait max 500ms for a response
-static constexpr size_t RX_CLEANUP_BYTES_LIMIT = 256;          // Limite pour détecter un flood au cleanup
+static constexpr size_t RX_CLEANUP_BYTES_LIMIT = 256;          // Limit to detect a flood at cleanup
 
 } // namespace EZLinkDfs
 
@@ -262,18 +262,6 @@ public:
         #endif
     }
 
-    /* @brief Extract data from a message
-     * @param msg: The message to extract data from
-     * @param outData: The buffer to store the extracted data
-     * @param outDataLen: The length of the extracted data */
-    template<typename T>
-    void extractData(const T& msg, uint8_t* outData, size_t& outDataLen) {
-        if (outData) {
-            outDataLen = sizeof(T);
-            memcpy(outData, &msg, outDataLen);
-        }
-    }
-
     /* @brief Register a REQUEST prototype
      * @return Result of the operation */
     template<typename T>
@@ -286,7 +274,8 @@ public:
         static_assert((T::id & EZLinkDfs::ID_RESPONSE_BIT) == 0, "Request ID must be <= 127");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert(sizeof(T) + EZLinkDfs::FRAME_OVERHEAD <= EZLinkDfs::MAX_FRAME_SIZE, "Message too large");
-        return registerProtoInternal<T>(T::id);
+        
+        return registerProtoInternal(T::id, T::type, sizeof(T));
     }
 
     /* @brief Register a RESPONSE prototype
@@ -306,58 +295,58 @@ public:
             return Error(ERR_REG_INVALID_ID, T::id);  // No corresponding request
         }
 
-        // Replace the ID by its complement (ID | 0x80)
-        return registerProtoInternal<T>(T::id | EZLinkDfs::ID_RESPONSE_BIT);
+        return registerProtoInternal(T::id | EZLinkDfs::ID_RESPONSE_BIT, T::type, sizeof(T));
     }
 
-    /* @brief Handler for MESSAGE and MESSAGE_ACK messages
-     * @param handler: The handler to call when a message is received
+    /* @brief Register a MESSAGE or MESSAGE_ACK handler
+     * @param id: Message ID
+     * @param handler: Handler function
      * @return Result of the operation */
-    template<typename T>
-    Result onReceive(std::function<void(const T&)> handler) {
-        static_assert(T::type == MsgType::MESSAGE || 
-                     T::type == MsgType::MESSAGE_ACK,
-                     "onReceive only works with MESSAGE or MESSAGE_ACK messages");
-        return onMessage<T>(handler);
-    }
-
-    /* @brief Handler for REQUEST messages with automatic response
-     * @param handler: The handler to call when a message is received
-     * @return Result of the operation */
-    template<typename REQ>
-    Result onRequest(std::function<void(const REQ&, typename REQ::ResponseType&)> handler) {
-        static_assert(REQ::type == MsgType::REQUEST, 
-                     "onRequest only works with REQUEST messages");
-        static_assert(REQ::ResponseType::type == MsgType::RESPONSE, 
-                     "Response type must be RESPONSE");
+    Result onReceive(uint8_t id, void (*handler)(const void*)) {
+        ProtoStore* proto = findProto(id);
+        if(proto == nullptr) {
+            return Error(ERR_REG_INVALID_ID, id);
+        }
         
-        return onMessage<REQ>([this, handler](const REQ& req) {
-            typename REQ::ResponseType resp;
-            // Call the handler
-            handler(req, resp);
-
-            // Send the response automatically
-            Result result = sendMsgInternal(resp, true);
-            #ifdef EZLINK_DEBUG
-            if (result != SUCCESS) {
-                debugPrintf("Erreur envoi response ID=0x%02X, code=%d", REQ::id, result.status);
-            } else {
-                debugPrintf("Response ID=0x%02X envoyee avec succes", REQ::id);
-            }
-            #endif
-        });
+        if(proto->type != MsgType::MESSAGE && proto->type != MsgType::MESSAGE_ACK) {
+            return Error(ERR_REG_PROTO_MISMATCH, id);
+        }
+        
+        proto->handler.onReceive = handler;
+        proto->hasHandler = true;
+        
+        return Success(id);
     }
 
-    /* @brief Type-safe send for MESSAGE messages
-     * @param msg: The message to send
+    /* @brief Register a REQUEST handler with automatic response
+     * @param id: Request ID
+     * @param handler: Handler function
      * @return Result of the operation */
+    Result onRequest(uint8_t id, void (*handler)(const void*, void*)) {
+        ProtoStore* proto = findProto(id);
+        if(proto == nullptr) {
+            return Error(ERR_REG_INVALID_ID, id);
+        }
+        
+        if(proto->type != MsgType::REQUEST) {
+            return Error(ERR_REG_PROTO_MISMATCH, id);
+        }
+        
+        proto->handler.onRequest = handler;
+        proto->hasHandler = true;
+        
+        return Success(id);
+    }
+
+    /* @brief Type-safe send for MESSAGE messages */
     template<typename T>
     Result sendMsg(const T& msg) {
         static_assert(T::type == MsgType::MESSAGE, "Wrong message type, sendMsg() only works with MESSAGE messages");
         static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
         static_assert((T::id & EZLinkDfs::ID_RESPONSE_BIT) == 0, "ID must be <= 127");
-        static_assert(T::id != EZLinkDfs::NULL_ID, "ID must not be NULL (0)");  // Check at compilation
-        return sendMsgInternal(msg, false);
+        static_assert(T::id != EZLinkDfs::NULL_ID, "ID must not be NULL (0)");
+        
+        return sendMsgInternal(&msg, T::id, sizeof(T), false);
     }
 
     /* @brief Send message and wait for acknowledgement (same message echoed back)
@@ -377,7 +366,7 @@ public:
         }
         
         // Send message first
-        result = sendMsgInternal(msg, false);
+        result = sendMsgInternal(&msg, T::id, sizeof(T), false);
         if (result != SUCCESS) {
             return Error(result.status, T::id);
         }
@@ -436,7 +425,7 @@ public:
         }
         
         // Send request
-        result = sendMsgInternal(req);
+        result = sendMsgInternal(&req, REQ::id, sizeof(REQ), false);
         if (result != SUCCESS) {
             return Error(result.status, REQ::id);
         }
@@ -486,31 +475,51 @@ public:
         
         // If capture succeeded, check that it's not a response
         if(result == SUCCESS) {
-            
             // Reject responses (bit 7 set)
             if((result.id & EZLinkDfs::ID_RESPONSE_BIT) != 0) {
                 return Error(ERR_RCV_UNEXPECTED_RESPONSE, result.id);
             }
 
-            // Find the proto and check the size
-            ProtoStore* proto = findProto(result.id);
-            if(proto) {
-                // Check that the size matches the proto
-                if(frameLen - EZLinkDfs::FRAME_OVERHEAD != proto->size) {
-                    return Error(ERR_RCV_PROTO_MISMATCH, result.id);
-                }
-                
-                // Call the handler if registered
-                if(proto->callback) {
-                    proto->callback(&rxBuffer[3]);
-                }
+            // Find the proto and validate size
+            ProtoStore* proto;
+            Result protoCheck = checkProto(result.id, frameLen - EZLinkDfs::FRAME_OVERHEAD, &proto);
+            if(protoCheck != SUCCESS) {
+                return protoCheck;
+            }
 
-                // If it's a MESSAGE_ACK message, send the ACK automatically,
-                // flipping the ID
-                uint8_t ackId = result.id | EZLinkDfs::ID_RESPONSE_BIT;
-                if(proto->type == MsgType::MESSAGE_ACK) {
-                    sendFrame(ackId, &rxBuffer[3], proto->size);
+            // Call the handler if registered
+            if(proto->hasHandler) {
+                switch(proto->type) {
+                    case MsgType::REQUEST: {
+                        // For REQUEST messages, handle the response
+                        uint8_t responseBuffer[EZLinkDfs::MAX_FRAME_SIZE - EZLinkDfs::FRAME_OVERHEAD];
+                        proto->handler.onRequest(&rxBuffer[3], responseBuffer);
+                        
+                        // Send response automatically
+                        ProtoStore* responseProto = findProto(result.id | EZLinkDfs::ID_RESPONSE_BIT);
+                        if (responseProto) {
+                            sendMsgInternal(responseBuffer, result.id, responseProto->size, true);
+                        }
+                        break;
+                    }
+                    case MsgType::MESSAGE_ACK:
+                        // Process the message and send the ACK
+                        proto->handler.onReceive(&rxBuffer[3]);
+                        sendFrame(result.id | EZLinkDfs::ID_RESPONSE_BIT, &rxBuffer[3], proto->size);
+                        break;
+                        
+                    case MsgType::MESSAGE:
+                        proto->handler.onReceive(&rxBuffer[3]);
+                        break;
+
+                    default:
+                        // Should never happen, types are checked at compilation
+                        break;
                 }
+            }
+            // If MESSAGE_ACK but no handler, send the ACK anyway
+            else if(proto->type == MsgType::MESSAGE_ACK) {
+                sendFrame(result.id | EZLinkDfs::ID_RESPONSE_BIT, &rxBuffer[3], proto->size);
             }
             return result;
         }
@@ -572,10 +581,13 @@ private:
     /* @brief Structure to store message prototypes */
     struct ProtoStore {
         MsgType type = MsgType::MESSAGE;
-        const char* name = nullptr;
         uint8_t id = EZLinkDfs::NULL_ID;
         size_t size = 0;
-        std::function<void(const void*)> callback = nullptr;
+        union {
+            void (*onReceive)(const void*);    
+            void (*onRequest)(const void*, void*);  
+        } handler = {nullptr};
+        bool hasHandler = false;  // To know if the handler is defined
     };
 
     // Attributes
@@ -658,16 +670,15 @@ private:
 
     /* @brief Register message prototype
      * @param id: The ID of the prototype
+     * @param type: The type of message
+     * @param size: The size of the message
      * @return Result of the operation */
-    template<typename T>
-    Result registerProtoInternal(uint8_t id) {
-        // Proto validation is already done in registerRequest() and registerResponse()
-        
-        // Check if already registered (by ID or by name)
+    Result registerProtoInternal(uint8_t id, MsgType type, size_t size) {
+        // Check if already registered
         for(size_t i = 0; i < EZLinkDfs::MAX_PROTOS; i++) {
             if(protos[i].id != EZLinkDfs::NULL_ID) {
-                if(protos[i].id == id) {  // On compare avec le ID modifié !
-                    return Error(ERR_ID_ALREADY_REGISTERED, T::id);
+                if(protos[i].id == id) {
+                    return Error(ERR_ID_ALREADY_REGISTERED, id);
                 }
             }
         }
@@ -675,27 +686,43 @@ private:
         // Find a free slot
         ProtoStore* slot = findFreeSlot();
         if(slot == nullptr) {
-            return Error(ERR_TOO_MANY_PROTOS, T::id);
+            return Error(ERR_TOO_MANY_PROTOS, id);
         }
         
         // Register the proto
-        slot->id = id;  // Use the modified ID passed as parameter
-        slot->type = T::type;
-        slot->size = sizeof(T);
+        slot->id = id;
+        slot->type = type;
+        slot->size = size;
+        slot->hasHandler = false;
         
-        return Success(T::id);
+        return Success(id);
     }
 
-    /* @brief Check if proto is registered and matches
+    /* @brief Check if proto is registered and validate its properties
      * @param id: The ID of the prototype
+     * @param size: Size to validate
      * @param outProto: The pointer to the proto found (optional)
+     * @param isReceiving: true if checking a received message, false if checking before sending
      * @return Result of the operation */
-    template<typename T>
-    Result checkProto(uint8_t id, ProtoStore** outProto = nullptr) {
+    Result checkProto(uint8_t id, size_t size, ProtoStore** outProto = nullptr, bool isReceiving = false) {
+        if (size == 0) {
+            return Error(isReceiving ? ERR_RCV_INVALID_LEN : ERR_SND_EMPTY_DATA);
+        }
+
         ProtoStore* proto = findProto(id);
         if (proto == nullptr) {
-            return Error(ERR_SND_INVALID_ID, id);
+            return Error(isReceiving ? ERR_RCV_INVALID_ID : ERR_SND_INVALID_ID, id);
         }
+
+        // If size provided, validate it
+        if (size != proto->size) {
+            #ifdef EZLINK_DEBUG
+            debugPrintf("Error: message size mismatch for ID=0x%02X (got %u, expected %u)", 
+                       id, size, proto->size);
+            #endif
+            return Error(isReceiving ? ERR_RCV_PROTO_MISMATCH : ERR_SND_PROTO_MISMATCH, id);
+        }
+
         if(outProto) {
             *outProto = proto;
         }
@@ -703,27 +730,27 @@ private:
     }
 
     /* @brief Send message
-     * @param msg: The message to send
+     * @param msg: Pointer to the message data
+     * @param id: Message ID
+     * @param size: Message size
      * @param flipId: Whether to flip the ID (for responses)
      * @return Result of the operation */
-    template<typename T>
-    Result sendMsgInternal(const T& msg, bool flipId = false) {
-
+    Result sendMsgInternal(const void* msg, uint8_t id, size_t size, bool flipId = false) {
         // Define ID, flip if needed (for responses)
-        uint8_t id = msg.id;
         if (flipId) id |= EZLinkDfs::ID_RESPONSE_BIT;
 
-        // Check if proto is registered and matches
-        Result protoCheck = checkProto<T>(id);
+        // Check if proto is registered and validate size
+        ProtoStore* proto;
+        Result protoCheck = checkProto(id, size, &proto);
         if(protoCheck != SUCCESS) {
             #ifdef EZLINK_DEBUG
-            debugPrintf("Erreur validation proto response ID=0x%02X, code=%d", id, protoCheck.status);
+            debugPrintf("Error validating proto ID=0x%02X, code=%d", id, protoCheck.status);
             #endif
             return protoCheck;
         }
 
         // Send frame
-        return sendFrame(id, (uint8_t*)&msg, sizeof(T));
+        return sendFrame(id, (const uint8_t*)msg, size);
     }
 
     /* @brief Send message
@@ -731,7 +758,7 @@ private:
      * @param data: The data to send
      * @param dataLen: The length of the data
      * @return Result of the operation */
-    Result sendFrame(uint8_t id, uint8_t* data, size_t dataLen) {
+    Result sendFrame(uint8_t id, const uint8_t* data, size_t dataLen) {
         if (!data || dataLen == 0) {
             return Error(ERR_SND_EMPTY_DATA);
         }
@@ -895,26 +922,6 @@ private:
         return Success(id);
     }
 
-    /* @brief Generic handler (internal usage only)
-     * @param handler: The handler to call when a message is received
-     * @return Result of the operation */
-    template<typename T>
-    Result onMessage(std::function<void(const T&)> handler) {
-        static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
-        static_assert(T::id < 256, "ID must be < 256");
-        
-        ProtoStore* proto = findProto(T::id);
-        if(proto == nullptr) {
-            return Error(ERR_REG_INVALID_ID, T::id);
-        }
-        
-        proto->callback = [handler](const void* data) {
-            handler(*static_cast<const T*>(data));
-        };
-        
-        return Success(T::id);
-    }
-
     /* @brief Process incoming data */
     void processRx() {
         // Read only if there is space in the buffer
@@ -950,14 +957,6 @@ private:
             }
         }
         return nullptr;
-    }
-
-    /* @brief Compare 2 strings
-     * @param a: The first string
-     * @param b: The second string
-     * @return True if the strings are equal, false otherwise */
-    static bool strEqual(const char* a, const char* b) {
-        return strcmp(a, b) == 0;
     }
 
 #ifdef UNIT_TESTING

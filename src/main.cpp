@@ -3,6 +3,7 @@
 #include "EZLink_Proto.h"
 
 // Communication pins
+// XIAO ESP32S3
 #define UART1_RX D5
 #define UART1_TX D6
 #define UART2_RX D7
@@ -203,6 +204,11 @@ struct Stats {
     }
 } txRxStats;
 
+// Handler functions declarations
+void onSetLedMsg(const void* data);
+void onSetPwmMsg(const void* data); 
+void onGetStatusMsg(const void* data, void* response);
+
 // Master task that executes tests sequentially
 void masterTask(void* parameter) {
     // Wait for slave to be fully started
@@ -388,23 +394,10 @@ void setup() {
     slave.registerRequest<GetStatusMsg>();
     slave.registerResponse<StatusResponseMsg>();
     
-    // Setup handlers
-    slave.onReceive<SetLedMsg>([](const SetLedMsg& msg) {
-        logf("SLAVE: Received LED message, state=%d", msg.state);
-        txRxStats.messagesReceived++;
-    });
-    
-    slave.onReceive<SetPwmMsg>([](const SetPwmMsg& msg) {
-        logf("SLAVE: Received PWM message, pin=%d, freq=%lu", msg.pin, msg.freq);
-        txRxStats.acksReceived++;
-    });
-    
-    slave.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp) {
-        logf("SLAVE: Received status request");
-        txRxStats.requestsReceived++;
-        resp.state = 1;
-        resp.uptime = millis();
-    });
+    // Setup handlers with new C-style functions
+    slave.onReceive(SetLedMsg::id, onSetLedMsg);
+    slave.onReceive(SetPwmMsg::id, onSetPwmMsg);
+    slave.onRequest(GetStatusMsg::id, onGetStatusMsg);
     
     // Create tasks - they will start automatically after setup()
     xTaskCreatePinnedToCore(
@@ -439,6 +432,29 @@ void setup() {
     );
     
     log("Configuration completed, starting tests...\n");
+}
+
+// Handler implementations
+void onSetLedMsg(const void* data) {
+    const SetLedMsg* msg = static_cast<const SetLedMsg*>(data);
+    logf("SLAVE: Received LED message, state=%d", msg->state);
+    txRxStats.messagesReceived++;
+}
+
+void onSetPwmMsg(const void* data) {
+    const SetPwmMsg* msg = static_cast<const SetPwmMsg*>(data);
+    logf("SLAVE: Received PWM message, pin=%d, freq=%lu", msg->pin, msg->freq);
+    txRxStats.acksReceived++;
+}
+
+void onGetStatusMsg(const void* data, void* response) {
+    const GetStatusMsg* req = static_cast<const GetStatusMsg*>(data);
+    StatusResponseMsg* resp = static_cast<StatusResponseMsg*>(response);
+    
+    logf("SLAVE: Received status request");
+    txRxStats.requestsReceived++;
+    resp->state = 1;
+    resp->uptime = millis();
 }
 
 void loop() {

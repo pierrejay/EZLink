@@ -5,10 +5,12 @@
 #include "EZLink_Proto.h"
 
 // Communication pins
+// XIAO ESP32S3
 #define UART1_RX D5
 #define UART1_TX D6
 #define UART2_RX D7
 #define UART2_TX D8
+
 
 // Polling delay for slave
 #define SLAVE_DELAY_MS 10
@@ -22,6 +24,11 @@ EZLink slave(&Serial2);
 #endif
 
 TaskHandle_t slaveTask = NULL;
+
+// Variables globales pour les tests
+static bool messageReceived = false;
+static bool messageLedReceived = false;
+static int receivedCount = 0;
 
 // Message with maximum payload
 struct MaxPayloadMsg {
@@ -144,14 +151,18 @@ void tearDown(void) {
     }
 }
 
+// Déclarations des handlers pour les tests
+void onSetLedHandler(const void* data) {
+    const SetLedMsg* msg = static_cast<const SetLedMsg*>(data);
+    messageReceived = true;
+    TEST_ASSERT_EQUAL(1, msg->state);
+}
+
 void test_basic_communication() {
-    bool messageReceived = false;
+    messageReceived = false;  // Reset avant le test
     
-    // Setup handler
-    slave.onReceive<SetLedMsg>([&messageReceived](const SetLedMsg& msg) {
-        messageReceived = true;
-        TEST_ASSERT_EQUAL(1, msg.state);
-    });
+    // Setup handler avec la nouvelle syntaxe
+    slave.onReceive(SetLedMsg::id, onSetLedHandler);
     
     // Send message
     SetLedMsg msg{.state = 1};
@@ -168,15 +179,17 @@ void test_basic_communication() {
     TEST_ASSERT_TRUE(messageReceived);
 }
 
+void onSetPwmHandler(const void* data) {
+    const SetPwmMsg* msg = static_cast<const SetPwmMsg*>(data);
+    messageReceived = true;
+    TEST_ASSERT_EQUAL(1000, msg->freq);
+}
+
 void test_ack_required() {
+    messageReceived = false;  // Reset avant le test
     
-    bool messageReceived = false;
-    
-    // Setup handler
-    slave.onReceive<SetPwmMsg>([&messageReceived](const SetPwmMsg& msg) {
-        messageReceived = true;
-        TEST_ASSERT_EQUAL(1000, msg.freq);
-    });
+    // Setup handler avec la nouvelle syntaxe
+    slave.onReceive(SetPwmMsg::id, onSetPwmHandler);
     
     // Send message with ACK
     SetPwmMsg msg{.pin = 1, .freq = 1000};
@@ -192,14 +205,19 @@ void test_ack_required() {
     TEST_ASSERT_TRUE(messageReceived);
 }
 
+void onGetStatusHandler(const void* data, void* response) {
+    const GetStatusMsg* req = static_cast<const GetStatusMsg*>(data);
+    StatusResponseMsg* resp = static_cast<StatusResponseMsg*>(response);
+    Serial.println("Handler GetStatus appelé");
+    resp->state = 1;
+    resp->uptime = 1000;
+}
+
 void test_request_response() {
-    startSlaveTask(); // Start slave task
+    startSlaveTask();
     
-    slave.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp) {
-        Serial.println("Handler GetStatus appelé");
-        resp.state = 1;
-        resp.uptime = 1000;
-    });
+    // Setup handler avec la nouvelle syntaxe
+    slave.onRequest(GetStatusMsg::id, onGetStatusHandler);
 
     // Wait for slave task to be well started and stable
     delay(50);
@@ -211,7 +229,15 @@ void test_request_response() {
     TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     TEST_ASSERT_EQUAL(1, resp.state);
     TEST_ASSERT_EQUAL(1000, resp.uptime);
+}
 
+void onMaxPayloadHandler(const void* data) {
+    const MaxPayloadMsg* msg = static_cast<const MaxPayloadMsg*>(data);
+    messageReceived = true;
+    // Verify pattern is intact
+    for(size_t i = 0; i < sizeof(msg->data); i++) {
+        TEST_ASSERT_EQUAL(i & 0xFF, msg->data[i]);
+    }
 }
 
 // Robustness tests
@@ -224,7 +250,7 @@ void test_max_payload() {
     
     startSlaveTask();  // Start slave task
     
-    bool messageReceived = false;
+    messageReceived = false;  // Reset global variable
     MaxPayloadMsg msg;
     
     // Fill payload with a recognizable pattern
@@ -232,20 +258,19 @@ void test_max_payload() {
         msg.data[i] = i & 0xFF;
     }
     
-    // Setup handler
-    slave.onReceive<MaxPayloadMsg>([&messageReceived, &msg](const MaxPayloadMsg& received) {
-        messageReceived = true;
-        // Verify pattern is intact
-        for(size_t i = 0; i < sizeof(msg.data); i++) {
-            TEST_ASSERT_EQUAL(i & 0xFF, received.data[i]);
-        }
-    });
+    // Setup handler avec la nouvelle syntaxe
+    slave.onReceive(MaxPayloadMsg::id, onMaxPayloadHandler);
     
     auto result = master.sendMsg(msg);
     TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     delay(50);  // Give some time for slave to process
     TEST_ASSERT_TRUE(messageReceived);
+}
+
+void onEmptyMsgHandler(const void* data) {
+    const EmptyMsg* msg = static_cast<const EmptyMsg*>(data);
+    messageReceived = true;
 }
 
 void test_empty_payload() {
@@ -257,18 +282,23 @@ void test_empty_payload() {
     
     startSlaveTask();
     
-    bool messageReceived = false;
+    messageReceived = false;  // Reset global variable
     EmptyMsg msg;
     
-    slave.onReceive<EmptyMsg>([&messageReceived](const EmptyMsg& received) {
-        messageReceived = true;
-    });
+    // Setup handler avec la nouvelle syntaxe
+    slave.onReceive(EmptyMsg::id, onEmptyMsgHandler);
     
     auto result = master.sendMsg(msg);
     TEST_ASSERT_EQUAL(EZLink::SUCCESS, result.status);
     
     delay(50);
     TEST_ASSERT_TRUE(messageReceived);
+}
+
+void onBurstMsgHandler(const void* data) {
+    const BurstMsg* msg = static_cast<const BurstMsg*>(data);
+    TEST_ASSERT_EQUAL(receivedCount, msg->sequence);
+    receivedCount++;
 }
 
 void test_burst_messages() {
@@ -281,12 +311,10 @@ void test_burst_messages() {
     startSlaveTask();
     
     const int NUM_MESSAGES = 10;
-    int receivedCount = 0;
+    receivedCount = 0;  // Reset du compteur global
     
-    slave.onReceive<BurstMsg>([&receivedCount](const BurstMsg& msg) {
-        TEST_ASSERT_EQUAL(receivedCount, msg.sequence);
-        receivedCount++;
-    });
+    // Setup handler avec la nouvelle syntaxe
+    slave.onReceive(BurstMsg::id, onBurstMsgHandler);
     
     // Send messages in burst
     for(int i = 0; i < NUM_MESSAGES; i++) {
@@ -300,6 +328,13 @@ void test_burst_messages() {
     TEST_ASSERT_EQUAL(NUM_MESSAGES, receivedCount);
 }
 
+void onPingMsgHandler(const void* data, void* response) {
+    const PingMsg* req = static_cast<const PingMsg*>(data);
+    PongMsg* resp = static_cast<PongMsg*>(response);
+    resp->echo_timestamp = req->timestamp;
+    resp->response_timestamp = millis();
+}
+
 void test_bidirectional() {
     Serial.println("Début test_bidirectional");
     
@@ -308,15 +343,11 @@ void test_bidirectional() {
     master.registerResponse<PongMsg>();
     slave.registerRequest<PingMsg>();
     slave.registerResponse<PongMsg>();
-
     
     startSlaveTask();
     
-    // Setup slave handler
-    slave.onRequest<PingMsg>([](const PingMsg& req, PongMsg& resp) {
-        resp.echo_timestamp = req.timestamp;
-        resp.response_timestamp = millis();
-    });
+    // Setup handler avec la nouvelle syntaxe
+    slave.onRequest(PingMsg::id, onPingMsgHandler);
     
     const int NUM_PINGS = 5;
     for(int i = 0; i < NUM_PINGS; i++) {
@@ -513,6 +544,25 @@ public:
     }
 };
 
+// Handlers pour test_custom_callbacks
+void onCustomSetLedHandler(const void* data) {
+    const SetLedMsg* msg = static_cast<const SetLedMsg*>(data);
+    messageLedReceived = true;
+    TEST_ASSERT_EQUAL(1, msg->state);
+}
+
+void onCustomSetPwmHandler(const void* data) {
+    const SetPwmMsg* msg = static_cast<const SetPwmMsg*>(data);
+    TEST_ASSERT_EQUAL(1000, msg->freq);
+}
+
+void onCustomGetStatusHandler(const void* data, void* response) {
+    const GetStatusMsg* req = static_cast<const GetStatusMsg*>(data);
+    StatusResponseMsg* resp = static_cast<StatusResponseMsg*>(response);
+    resp->state = 1;
+    resp->uptime = 1000;
+}
+
 void test_custom_callbacks() {
     Serial.println("Début test_custom_callbacks");
 
@@ -550,21 +600,11 @@ void test_custom_callbacks() {
     slave.registerRequest<GetStatusMsg>();
     slave.registerResponse<StatusResponseMsg>();
 
-    // Configure slave handlers
-    bool messageLedReceived = false;
-    slave.onReceive<SetLedMsg>([&messageLedReceived](const SetLedMsg& msg) {
-        messageLedReceived = true;
-        TEST_ASSERT_EQUAL(1, msg.state);
-    });
-
-    slave.onReceive<SetPwmMsg>([](const SetPwmMsg& msg) {
-        TEST_ASSERT_EQUAL(1000, msg.freq);
-    });
-
-    slave.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp) {
-        resp.state = 1;
-        resp.uptime = 1000;
-    });
+    // Configure slave handlers avec la nouvelle syntaxe
+    messageLedReceived = false;  // Reset avant le test
+    slave.onReceive(SetLedMsg::id, onCustomSetLedHandler);
+    slave.onReceive(SetPwmMsg::id, onCustomSetPwmHandler);
+    slave.onRequest(GetStatusMsg::id, onCustomGetStatusHandler);
 
     // Start slave task specific to this test
     xTaskCreatePinnedToCore(

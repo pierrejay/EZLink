@@ -23,7 +23,7 @@
 The library is built around message structs that serve as message prototypes. You simply declare these structs in a declarative way using native C++ types, and the library handles all the framing, encoding, decoding and validation automatically. Think of it as a very lightweight alternative to Protobuf, combined with a robust transport layer that handles message framing and validation. All of this using simple C++ structs that double as both message definitions and instances, making the protocol self-documenting and easy to maintain.
 
 Key design points:
-- Minimal Flash/RAM footprint (as low as ~2KB code size, optimization WIP): suitable for the most constrained microcontrollers such as `STM32F03x` series.
+- Minimal Flash/RAM footprint (~1KB code size + ~300B/message): suitable for the most constrained microcontrollers such as `STM32F03x` series.
 - Simple API with a strong focus on reliability and explicit error reporting. 
 - User-friendly, declarative approach to define message prototypes. 
 - Built-in support for **messages** (one-way), **acknowledged messages**, and **request/response** flows.  
@@ -32,8 +32,6 @@ Key design points:
 - Works seamlessly on **Arduino** platforms or via custom TX/RX callbacks on bare-metal/RTOS-based firmware as long as your target supports C++11.
 
 Whether you are building a Master/Slave setup over UART or need robust bidirectional communications, **EZLink** aims to keep things **KISS** (Keep It Simple, Stupid) while maximizing runtime safety (CRC checks, well-defined message boundaries, error codes, etc.).
-
-Note: the current implementation is fully tested and functional, but work is still in progress to improve the software. I am currently focused on further reducing code size. The template approach generates lots of duplicate code, taking up ~500B of flash memory for each additional registered message prototype. Serializing message structures earlier in the process should further reduce it down to less than 1KB + ~150B per message prototype.
 
 ## EZLink Minimal Example
 
@@ -46,7 +44,6 @@ using MsgType = EZLink::MsgType;
 struct ControlMsg {
     static constexpr MsgType type = MsgType::MESSAGE_ACK;
     static constexpr uint8_t id = 1;
-    
     uint8_t channel;     // Which channel to control
     uint16_t value;      // Control value
     uint8_t flags;       // Control flags
@@ -88,16 +85,19 @@ void loop() {
 
 EZLink slave(&UART);
 
+// Function to process control messages
+void onControlMsg(const void data) {
+    const ControlMsg msg = static_cast<const ControlMsg>(data);
+    processControl(msg->channel, msg->value, msg->flags); // Process received message (business logic)
+}
+
 void setup() {
     UART.begin(115200);
     slave.begin();
     
     // Register message and handler
     slave.registerRequest<ControlMsg>();
-    slave.onReceive<ControlMsg>([](const ControlMsg& msg) {
-        // Process received message
-        processControl(msg.channel, msg.value, msg.flags);
-    }); 
+    slave.onReceive(ControlMsg::id, processControl);
     // Acknowledgment is automatically sent back to the master after processing
 }
 
@@ -133,7 +133,7 @@ That's it! A complete bidirectional communication system in ~50 lines of code.
    - No manual parsing logic; a message is always read/written as a strongly typed C++ struct.
 
 2. **Lightweight & fast**:  
-   - Fits into tight STM32 flash constraints (on the order of 2KB compiled).
+   - Fits into tight STM32 flash constraints (on the order of 2KB compiled w/ 4 message structs).
    - Ultra-low latency communications.
 
 3. **Full Safety by Default**:  
@@ -328,38 +328,40 @@ Each message type has specific registration requirements:
 ### 5. Defining Callbacks & Handlers
 After registering your messages and responses, you can attach callbacks that will trigger an action upon reception of a message or request (for example in the `setup()` function if you're using the Arduino framework).
 
+The library uses C-style function pointers for maximum efficiency. Handlers are registered this way:
+
 - **For `MESSAGE` or `MESSAGE_ACK`**:  
   ```cpp
+  void handleLedMessage(const void* data) {
+      const SetLedMsg* msg = static_cast<const SetLedMsg*>(data); // Capture the message
+      digitalWrite(LED_BUILTIN, msg->state);                      // Utilize message data
+  }
+  
+  // Register prototype and handler
   comm.registerRequest<SetLedMsg>();
-  comm.onReceive<SetLedMsg>([](const SetLedMsg& msg) { 
-      /* handle message received */ 
-  });
+  comm.onReceive(SetLedMsg::id, handleLedMessage);
   ```
 
 - **For `REQUEST/RESPONSE` pairs**:  
   ```cpp
-  // Register both request and response
+  void handleStatusRequest(const void* data, void* respData) {
+    const GetStatusMsg* req = static_cast<const GetStatusMsg*>(data);     // Capture the request
+    StatusResponseMsg* resp = static_cast<StatusResponseMsg*>(respData);  // Create the response
+    
+    // Fill response
+    resp->uptime = millis();
+    resp->state = getSystemState();
+
+    // Response is sent automatically by the library after the callback returns
+  }
+
+  // Register prototypes and handler
   comm.registerRequest<GetStatusMsg>();
   comm.registerResponse<StatusResponseMsg>();
-  
-  // Then setup the request handler
-  comm.onRequest<GetStatusMsg>([](
-      const GetStatusMsg& req, 
-      StatusResponseMsg& resp
-  ) { 
-      /* handle request & fill response */ 
-  });
+  comm.onRequest(GetStatusMsg::id, handleStatusRequest);
   ```
 
 Callbacks will be automatically called by the library when a matching message is received.
-
-Example:
-```cpp
-slave.registerRequest<SetLedMsg>();
-slave.onReceive<SetLedMsg>([](const SetLedMsg& msg) {
-    digitalWrite(LED_BUILTIN, msg.state); 
-});
-```
 
 ### 6. Sending & Receiving Messages
 
@@ -375,7 +377,8 @@ if (result != EZLink::SUCCESS) {
 
 #### Sending Acknowledged Messages (`MESSAGE_ACK`)
 ```cpp
-SetPwmMsg pwmMsg{.pin = 5, .freq = 1000};
+SetPwmMsg pwmMsg{.pin = 5, 
+                 .freq = 1000};
 auto result = comm.sendMsgAck(pwmMsg); 
 if (result != EZLink::SUCCESS) {
   // handle error, e.g., ERR_RCV_TIMEOUT
@@ -398,14 +401,16 @@ else {
   // error handling
 }
 ```
+
 - Like `MESSAGE_ACK`, it blocks waiting for the correct `RESPONSE`.  
 - On the receiver side:
-  ```cpp
-  comm.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp){
+```cpp
+  void handleStatusRequest(const GetStatusMsg& req, StatusResponseMsg& resp){ 
       resp.state = 1;
       resp.uptime = millis();
-  });
-  ```
+  }
+  comm.onRequest(GetStatusMsg::id, handleStatusRequest);
+```
 - Reponse is sent after executing the receiver's `onRequest` callback : when a response is received, the sender is sure that the receiver is ready to process the next incoming request.
 
 
