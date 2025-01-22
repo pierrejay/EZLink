@@ -23,7 +23,7 @@
 The library is built around message structs that serve as message prototypes. You simply declare these structs in a declarative way using native C++ types, and the library handles all the framing, encoding, decoding and validation automatically. Think of it as a very lightweight alternative to Protobuf, combined with a robust transport layer that handles message framing and validation. All of this using simple C++ structs that double as both message definitions and instances, making the protocol self-documenting and easy to maintain.
 
 Key design points:
-- Minimal Flash/RAM footprint (~1KB code size + ~400B/message): suitable for the most constrained microcontrollers such as `STM32F03x` series.
+- Minimal Flash/RAM footprint (~1KB code size + ~250B/message): suitable for the most constrained microcontrollers such as `STM32F03x` series.
 - Simple API with a strong focus on reliability and explicit error reporting. 
 - User-friendly, declarative approach to define message prototypes. 
 - Built-in support for **messages** (one-way), **acknowledged messages**, and **request/response** flows.  
@@ -132,7 +132,7 @@ That's it! A complete bidirectional communication system in ~50 lines of code.
    - No manual parsing logic; a message is always read/written as a strongly typed C++ struct.
 
 2. **Lightweight & fast**:  
-   - Fits into tight STM32 flash constraints (on the order of 2.5KB compiled w/ 4 message structs).
+   - Fits into tight STM32 flash constraints (on the order of 2KB compiled w/ 4 message structs).
    - Ultra-low latency communications.
 
 3. **Full Safety by Default**:  
