@@ -302,40 +302,29 @@ public:
      * @param id: Message ID
      * @param handler: Handler function
      * @return Result of the operation */
-    Result onReceive(uint8_t id, void (*handler)(const void*)) {
-        ProtoStore* proto = findProto(id);
-        if(proto == nullptr) {
-            return Error(ERR_REG_INVALID_ID, id);
-        }
-        
-        if(proto->type != MsgType::MESSAGE && proto->type != MsgType::MESSAGE_ACK) {
-            return Error(ERR_REG_PROTO_MISMATCH, id);
-        }
-        
-        proto->handler.onReceive = handler;
-        proto->hasHandler = true;
-        
-        return Success(id);
+    template<typename T>
+    Result onReceive(void(*handler)(const T&)) {
+        static_assert(T::type == MsgType::MESSAGE || 
+                     T::type == MsgType::MESSAGE_ACK,
+                     "onReceive<T>() only works with MESSAGE or MESSAGE_ACK types");
+        static_assert(std::is_standard_layout<T>::value, "Message type must be POD/standard-layout");
+        return OnReceiveHelper<T>::reg(*this, handler);
     }
 
     /* @brief Register a REQUEST handler with automatic response
-     * @param id: Request ID
      * @param handler: Handler function
      * @return Result of the operation */
-    Result onRequest(uint8_t id, void (*handler)(const void*, void*)) {
-        ProtoStore* proto = findProto(id);
-        if(proto == nullptr) {
-            return Error(ERR_REG_INVALID_ID, id);
-        }
-        
-        if(proto->type != MsgType::REQUEST) {
-            return Error(ERR_REG_PROTO_MISMATCH, id);
-        }
-        
-        proto->handler.onRequest = handler;
-        proto->hasHandler = true;
-        
-        return Success(id);
+    template<typename REQ>
+    Result onRequest(void(*handler)(const REQ&, typename REQ::ResponseType&)) {
+        static_assert(REQ::type == MsgType::REQUEST, 
+                     "onRequest<T>() only works with REQUEST types");
+        using RESP = typename REQ::ResponseType;
+        static_assert(RESP::type == MsgType::RESPONSE,
+                     "ResponseType must be a RESPONSE type");
+        static_assert(std::is_standard_layout<REQ>::value && 
+                     std::is_standard_layout<RESP>::value,
+                     "Message types must be POD/standard-layout");
+        return OnRequestHelper<REQ>::reg(*this, handler);
     }
 
     /* @brief Type-safe send for MESSAGE messages */
@@ -729,6 +718,91 @@ private:
         return Success(id);
     }
 
+    /* @brief Register a MESSAGE or MESSAGE_ACK handler
+     * @param id: Message ID
+     * @param handler: Handler function
+     * @return Result of the operation */
+    Result onReceive(uint8_t id, void (*handler)(const void*)) {
+        ProtoStore* proto = findProto(id);
+        if(proto == nullptr) {
+            return Error(ERR_REG_INVALID_ID, id);
+        }
+        
+        if(proto->type != MsgType::MESSAGE && proto->type != MsgType::MESSAGE_ACK) {
+            return Error(ERR_REG_PROTO_MISMATCH, id);
+        }
+        
+        proto->handler.onReceive = handler;
+        proto->hasHandler = true;
+        
+        return Success(id);
+    }
+
+    /* @brief Register a REQUEST handler with automatic response
+     * @param id: Request ID
+     * @param handler: Handler function
+     * @return Result of the operation */
+    Result onRequest(uint8_t id, void (*handler)(const void*, void*)) {
+        ProtoStore* proto = findProto(id);
+        if(proto == nullptr) {
+            return Error(ERR_REG_INVALID_ID, id);
+        }
+        
+        if(proto->type != MsgType::REQUEST) {
+            return Error(ERR_REG_PROTO_MISMATCH, id);
+        }
+        
+        proto->handler.onRequest = handler;
+        proto->hasHandler = true;
+        
+        return Success(id);
+    }
+
+
+    // Helper pour onReceive<T>
+    template<typename T>
+    struct OnReceiveHelper {
+        // Pointeur statique vers la fonction utilisateur
+        static void (*userHandler_)(const T&);
+
+        // Bridge C-style (signature = void(*)(const void*))
+        static void bridgingFn(const void* raw) {
+            T msg;
+            memcpy(&msg, raw, sizeof(T));
+            userHandler_(msg);
+        }
+
+        // Méthode pour enregistrer le handler
+        static Result reg(EZLink& link, void(*handler)(const T&)) {
+            userHandler_ = handler;
+            return link.onReceive(T::id, &bridgingFn);
+        }
+    };
+
+    // Helper pour onRequest<T>
+    template<typename REQ>
+    struct OnRequestHelper {
+        using RESP = typename REQ::ResponseType;
+        
+        // Pointeur statique vers la fonction utilisateur
+        static void (*userHandler_)(const REQ&, RESP&);
+
+        // Bridge C-style (signature = void(*)(const void*, void*))
+        static void bridgingFn(const void* reqData, void* respData) {
+            REQ req;
+            RESP resp;
+            memcpy(&req, reqData, sizeof(REQ));
+            userHandler_(req, resp);
+            memcpy(respData, &resp, sizeof(RESP));
+        }
+
+        // Méthode pour enregistrer le handler
+        static Result reg(EZLink& link, void(*handler)(const REQ&, RESP&)) {
+            userHandler_ = handler;
+            return link.onRequest(REQ::id, &bridgingFn);
+        }
+    };
+
     /* @brief Send message
      * @param msg: Pointer to the message data
      * @param id: Message ID
@@ -975,3 +1049,10 @@ public:
 #endif
 
 };
+
+// Définition des membres statiques (en dehors de la classe)
+template<typename T>
+void (*EZLink::OnReceiveHelper<T>::userHandler_)(const T&) = nullptr;
+
+template<typename REQ>
+void (*EZLink::OnRequestHelper<REQ>::userHandler_)(const REQ&, typename REQ::ResponseType&) = nullptr;

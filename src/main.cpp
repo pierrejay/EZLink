@@ -204,10 +204,23 @@ struct Stats {
     }
 } txRxStats;
 
-// Handler functions declarations
-void onSetLedMsg(const void* data);
-void onSetPwmMsg(const void* data); 
-void onGetStatusMsg(const void* data, void* response);
+// Handler functions avec typage fort
+void onSetLedMsg(const SetLedMsg& msg) {
+    logf("SLAVE: Received LED message, state=%d", msg.state);
+    txRxStats.messagesReceived++;
+}
+
+void onSetPwmMsg(const SetPwmMsg& msg) {
+    logf("SLAVE: Received PWM message, pin=%d, freq=%lu", msg.pin, msg.freq);
+    txRxStats.acksReceived++;
+}
+
+void onGetStatusMsg(const GetStatusMsg& req, StatusResponseMsg& resp) {
+    logf("SLAVE: Received status request");
+    txRxStats.requestsReceived++;
+    resp.state = 1;
+    resp.uptime = millis();
+}
 
 // Master task that executes tests sequentially
 void masterTask(void* parameter) {
@@ -394,10 +407,10 @@ void setup() {
     slave.registerRequest<GetStatusMsg>();
     slave.registerResponse<StatusResponseMsg>();
     
-    // Setup handlers with new C-style functions
-    slave.onReceive(SetLedMsg::id, onSetLedMsg);
-    slave.onReceive(SetPwmMsg::id, onSetPwmMsg);
-    slave.onRequest(GetStatusMsg::id, onGetStatusMsg);
+    // Setup handlers avec la nouvelle syntaxe type-safe
+    slave.onReceive<SetLedMsg>(onSetLedMsg);
+    slave.onReceive<SetPwmMsg>(onSetPwmMsg);
+    slave.onRequest<GetStatusMsg>(onGetStatusMsg);
     
     // Create tasks - they will start automatically after setup()
     xTaskCreatePinnedToCore(
@@ -432,29 +445,6 @@ void setup() {
     );
     
     log("Configuration completed, starting tests...\n");
-}
-
-// Handler implementations
-void onSetLedMsg(const void* data) {
-    const SetLedMsg* msg = static_cast<const SetLedMsg*>(data);
-    logf("SLAVE: Received LED message, state=%d", msg->state);
-    txRxStats.messagesReceived++;
-}
-
-void onSetPwmMsg(const void* data) {
-    const SetPwmMsg* msg = static_cast<const SetPwmMsg*>(data);
-    logf("SLAVE: Received PWM message, pin=%d, freq=%lu", msg->pin, msg->freq);
-    txRxStats.acksReceived++;
-}
-
-void onGetStatusMsg(const void* data, void* response) {
-    const GetStatusMsg* req = static_cast<const GetStatusMsg*>(data);
-    StatusResponseMsg* resp = static_cast<StatusResponseMsg*>(response);
-    
-    logf("SLAVE: Received status request");
-    txRxStats.requestsReceived++;
-    resp->state = 1;
-    resp->uptime = millis();
 }
 
 void loop() {
