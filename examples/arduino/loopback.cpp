@@ -345,6 +345,24 @@ void slaveTask(void* parameter) {
     }
 }
 
+// Handlers definition
+void onSetLedMsg(const SetLedMsg& msg) {
+    logf("SLAVE: Received LED message, state=%d", msg.state);
+    txRxStats.messagesReceived++;
+}
+
+void onSetPwmMsg(const SetPwmMsg& msg) {
+    logf("SLAVE: Received PWM message, pin=%d, freq=%lu", msg.pin, msg.freq);
+    txRxStats.acksReceived++;
+}
+
+void onGetStatusMsg(const GetStatusMsg& req, StatusResponseMsg& resp) {
+    logf("SLAVE: Received status request");
+    txRxStats.requestsReceived++;
+    resp.state = 1;
+    resp.uptime = millis();
+}
+
 void setup() {
     // Blink 5 times to indicate that the program is running
     pinMode(LED_BUILTIN, OUTPUT);
@@ -391,22 +409,9 @@ void setup() {
     slave.registerResponse<StatusResponseMsg>();
     
     // Setup handlers
-    slave.onReceive<SetLedMsg>([](const SetLedMsg& msg) {
-        logf("SLAVE: Received LED message, state=%d", msg.state);
-        txRxStats.messagesReceived++;
-    });
-    
-    slave.onReceive<SetPwmMsg>([](const SetPwmMsg& msg) {
-        logf("SLAVE: Received PWM message, pin=%d, freq=%lu", msg.pin, msg.freq);
-        txRxStats.acksReceived++;
-    });
-    
-    slave.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp) {
-        logf("SLAVE: Received status request");
-        txRxStats.requestsReceived++;
-        resp.state = 1;
-        resp.uptime = millis();
-    });
+    slave.onReceive<SetLedMsg>(onSetLedMsg);
+    slave.onReceive<SetPwmMsg>(onSetPwmMsg);
+    slave.onRequest<GetStatusMsg>(onGetStatusMsg);
     
     // Create tasks - they will start automatically after setup()
     xTaskCreatePinnedToCore(
