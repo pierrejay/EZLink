@@ -44,35 +44,12 @@ void pollTask(void* parameter) {
     }
 }
 
-extern "C" void app_main() {
-    // Configure GPIO
-    gpio_reset_pin(LED_PIN);
-    gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT);
+// Handlers definition
+void onSetLedMsg(const SetLedMsg& msg) {
+    gpio_set_level(LED_PIN, msg.state);
+}
 
-    // Configure UART
-    uart_config_t uart_config = {
-        .baud_rate = 115200,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
-    };
-    uart_param_config(UART_NUM, &uart_config);
-    uart_set_pin(UART_NUM, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    uart_driver_install(UART_NUM, BUF_SIZE, BUF_SIZE, 0, NULL, 0);
-    
-    // Register protos
-    comm.registerRequest<SetLedMsg>();
-    comm.registerRequest<SetPwmMsg>();
-    comm.registerRequest<GetStatusMsg>();
-    comm.registerResponse<StatusResponseMsg>();
-    
-    // Setup handlers
-    comm.onReceive<SetLedMsg>([](const SetLedMsg& msg) {
-        gpio_set_level(LED_PIN, msg.state);
-    });
-    
-    comm.onReceive<SetPwmMsg>([](const SetPwmMsg& msg) {
+void onSetPwmMsg(const SetPwmMsg& msg) {
         // Use LEDC for PWM
         static bool pwm_initialized = false;
         if (!pwm_initialized) {
@@ -97,13 +74,41 @@ extern "C" void app_main() {
             pwm_initialized = true;
         }
         ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0, msg.freq);
-    });
-    
-    comm.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp) {
-        resp.state = gpio_get_level(LED_PIN);
-        resp.uptime = esp_timer_get_time() / 1000;  // Convertir µs en ms
-    });
+}
 
+void onGetStatusMsg(const GetStatusMsg& req, StatusResponseMsg& resp) {
+    resp.state = gpio_get_level(LED_PIN);
+    resp.uptime = esp_timer_get_time() / 1000;  // Convertir µs en ms
+}
+
+extern "C" void app_main() {
+    // Configure GPIO
+    gpio_reset_pin(LED_PIN);
+    gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT);
+
+    // Configure UART
+    uart_config_t uart_config = {
+        .baud_rate = 115200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
+    };
+    uart_param_config(UART_NUM, &uart_config);
+    uart_set_pin(UART_NUM, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    uart_driver_install(UART_NUM, BUF_SIZE, BUF_SIZE, 0, NULL, 0);
+    
+    // Register protos
+    comm.registerRequest<SetLedMsg>();
+    comm.registerRequest<SetPwmMsg>();
+    comm.registerRequest<GetStatusMsg>();
+    comm.registerResponse<StatusResponseMsg>();
+    
+    // Setup handlers
+    comm.onReceive<SetLedMsg>(onSetLedMsg);
+    comm.onReceive<SetPwmMsg>(onSetPwmMsg);
+    comm.onRequest<GetStatusMsg>(onGetStatusMsg);
+    
     // Create poll task
     xTaskCreate(
         pollTask,

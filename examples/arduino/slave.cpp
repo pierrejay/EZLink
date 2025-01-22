@@ -4,6 +4,20 @@
 
 EZLink comm(&Serial1);  // Directly use HardwareSerial
 
+// Handlers definition
+void onSetLedMsg(const SetLedMsg& msg) {
+    digitalWrite(LED_BUILTIN, msg.state);
+}
+
+void onSetPwmMsg(const SetPwmMsg& msg) {
+    analogWrite(msg.pin, msg.freq);
+}
+
+void onGetStatusMsg(const GetStatusMsg& req, StatusResponseMsg& resp) {
+    resp.state = digitalRead(LED_BUILTIN);
+    resp.uptime = millis();
+}
+
 void setup() {
     Serial.begin(115200);  // Debug
     Serial1.begin(115200); // Communication
@@ -16,18 +30,9 @@ void setup() {
     comm.registerResponse<StatusResponseMsg>();
     
     // Setup handlers
-    comm.onReceive<SetLedMsg>([](const SetLedMsg& msg) {
-        digitalWrite(LED_BUILTIN, msg.state);
-    });
-    
-    comm.onReceive<SetPwmMsg>([](const SetPwmMsg& msg) {
-        analogWrite(msg.pin, msg.freq);
-    });
-    
-    comm.onRequest<GetStatusMsg>([](const GetStatusMsg& req, StatusResponseMsg& resp) {
-        resp.state = digitalRead(LED_BUILTIN);
-        resp.uptime = millis();
-    });
+    comm.onReceive<SetLedMsg>(onSetLedMsg);
+    comm.onReceive<SetPwmMsg>(onSetPwmMsg);
+    comm.onRequest<GetStatusMsg>(onGetStatusMsg);
 }
 
 void loop() {

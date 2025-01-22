@@ -23,7 +23,7 @@
 The library is built around message structs that serve as message prototypes. You simply declare these structs in a declarative way using native C++ types, and the library handles all the framing, encoding, decoding and validation automatically. Think of it as a very lightweight alternative to Protobuf, combined with a robust transport layer that handles message framing and validation. All of this using simple C++ structs that double as both message definitions and instances, making the protocol self-documenting and easy to maintain.
 
 Key design points:
-- Minimal Flash/RAM footprint (~1KB code size + ~300B/message): suitable for the most constrained microcontrollers such as `STM32F03x` series.
+- Minimal Flash/RAM footprint (~1KB code size + ~400B/message): suitable for the most constrained microcontrollers such as `STM32F03x` series.
 - Simple API with a strong focus on reliability and explicit error reporting. 
 - User-friendly, declarative approach to define message prototypes. 
 - Built-in support for **messages** (one-way), **acknowledged messages**, and **request/response** flows.  
@@ -86,9 +86,8 @@ void loop() {
 EZLink slave(&UART);
 
 // Function to process control messages
-void onControlMsg(const void data) {
-    const ControlMsg msg = static_cast<const ControlMsg>(data);
-    processControl(msg->channel, msg->value, msg->flags); // Process received message (business logic)
+void onControlMsg(const ControlMsg& msg) {
+    processControl(msg.channel, msg.value, msg.flags); // Process received message (business logic)
 }
 
 void setup() {
@@ -97,7 +96,7 @@ void setup() {
     
     // Register message and handler
     slave.registerRequest<ControlMsg>();
-    slave.onReceive(ControlMsg::id, processControl);
+    slave.onReceive<ControlMsg>(processControl);
     // Acknowledgment is automatically sent back to the master after processing
 }
 
@@ -133,7 +132,7 @@ That's it! A complete bidirectional communication system in ~50 lines of code.
    - No manual parsing logic; a message is always read/written as a strongly typed C++ struct.
 
 2. **Lightweight & fast**:  
-   - Fits into tight STM32 flash constraints (on the order of 2KB compiled w/ 4 message structs).
+   - Fits into tight STM32 flash constraints (on the order of 2.5KB compiled w/ 4 message structs).
    - Ultra-low latency communications.
 
 3. **Full Safety by Default**:  
@@ -328,29 +327,26 @@ Each message type has specific registration requirements:
 ### 5. Defining Callbacks & Handlers
 After registering your messages and responses, you can attach callbacks that will trigger an action upon reception of a message or request (for example in the `setup()` function if you're using the Arduino framework).
 
-The library uses C-style function pointers for maximum efficiency. Handlers are registered this way:
+Internally, the library uses C-style function pointers for maximum efficiency. Handlers are registered with a strong-typed façade avoiding the need to cast the data at all, making the usage safer and more intuitive. 
+
+N.B.: The registration is limited to one handler per message prototype. If you register another handler for the same message struct, it will replace the previous one.
 
 - **For `MESSAGE` or `MESSAGE_ACK`**:  
   ```cpp
-  void handleLedMessage(const void* data) {
-      const SetLedMsg* msg = static_cast<const SetLedMsg*>(data); // Capture the message
-      digitalWrite(LED_BUILTIN, msg->state);                      // Utilize message data
+  void handleLedMessage(const SetLedMsg& msg) {
+      digitalWrite(LED_BUILTIN, msg.state);                      // Utilize message data
   }
   
   // Register prototype and handler
   comm.registerRequest<SetLedMsg>();
-  comm.onReceive(SetLedMsg::id, handleLedMessage);
+  comm.onReceive<SetLedMsg>(handleLedMessage);
   ```
 
 - **For `REQUEST/RESPONSE` pairs**:  
   ```cpp
-  void handleStatusRequest(const void* data, void* respData) {
-    const GetStatusMsg* req = static_cast<const GetStatusMsg*>(data);     // Capture the request
-    StatusResponseMsg* resp = static_cast<StatusResponseMsg*>(respData);  // Create the response
-    
-    // Fill response
-    resp->uptime = millis();
-    resp->state = getSystemState();
+  void handleStatusRequest(const GetStatusMsg& req, StatusResponseMsg& resp) {
+    resp.uptime = millis();
+    resp.state = getSystemState();
 
     // Response is sent automatically by the library after the callback returns
   }
@@ -358,10 +354,11 @@ The library uses C-style function pointers for maximum efficiency. Handlers are 
   // Register prototypes and handler
   comm.registerRequest<GetStatusMsg>();
   comm.registerResponse<StatusResponseMsg>();
-  comm.onRequest(GetStatusMsg::id, handleStatusRequest);
+  comm.onRequest<GetStatusMsg>(handleStatusRequest);
   ```
 
-Callbacks will be automatically called by the library when a matching message is received.
+Callbacks will be automatically called by the library when a matching message is received. 
+
 
 ### 6. Sending & Receiving Messages
 
@@ -409,7 +406,7 @@ else {
       resp.state = 1;
       resp.uptime = millis();
   }
-  comm.onRequest(GetStatusMsg::id, handleStatusRequest);
+  comm.onRequest<GetStatusMsg>(handleStatusRequest);
 ```
 - Reponse is sent after executing the receiver's `onRequest` callback : when a response is received, the sender is sure that the receiver is ready to process the next incoming request.
 
@@ -462,6 +459,10 @@ If you want purely asynchronous behavior:
 
 ### Buffer Management & Large Frames
 - By default, `MAX_FRAME_SIZE` is set to `32`. This limits the maximum payload. You can adjust it in `EZLinkDfs` if needed.  
+- Important: When modifying `MAX_FRAME_SIZE`, ensure that:
+  1. All nodes (master & slaves) use the same value to maintain protocol compatibility
+  2. Your messages respect the size limit via compile-time checks (`static_assert`)
+  3. Consider RAM usage impact as the ScrollBuffer size scales with MAX_FRAME_SIZE
 - The "scroll buffer" approach implemented in the library ensures partial frames or garbage are eventually discarded without losing any valid subsequent frames. 
 - Several error cases have been thought of and handled, such as truncated frame, invalid length, invalid SOF, SOF present in data, etc. See unit tests for more details.
 - TLDR: as long as you continuously call `poll()` on the receiver side, the message processing pipeline will jump from one frame to the next and end up synchronizing with the next valid frame even if there's garbage in-between.
@@ -570,11 +571,28 @@ Here is an example of debug output with the parameters above:
 [DBG_SLAVE] TX frame (10B) SOF=0xAA LEN=10 ID=0x81 => AA 0A 81 01 00 00 00 00 EE 34 
 ```
 
+### Code Organization & Header-Only Design
+
+The library follows a header-only approach where most code is contained in the headers:
+
+#### Advantages:
+- Easy to include in projects (no separate .cpp files needed)
+- Simple dependency management
+- Direct compiler optimization possibilities
+
+#### Considerations:
+- Template usage is moderate to avoid code bloat while offering an intuitive API with strong typing.
+- Most logic is factored into non-template code
+- Compilation units generate minimal duplicate code
+
+This design choice balances ease of use with resource efficiency, making it particularly suitable for embedded projects.
+
 ## Practical Considerations & Best Practices
 
 - **Always** register the same prototypes on both ends: matching types, IDs, and data structures. Make sure to use a common `Prototypes.h` (or similar) file.
 - **Never** forget to use the `__attribute__((packed))` keyword on your message structs to avoid padding issues.
 - In your `Prototypes.h` file, for `REQUEST/RESPONSE` pairs, ensure the Response struct is declared before the Request struct or use a forward declaration for the Response struct. Otherwise the compiler might throw an error, as when it's parsing the Request struct, he yet doesn't know the `ResponseType` declared inside.
+- The library accepts a single handler per message prototype. If you register another handler for the same message struct, it will replace the previous one.
 - **Synchronous** patterns (like `sendMsgAck` or `sendRequest`) block until a response arrives or times out. In a busy system, call them from a context where blocking the current thread is acceptable.  
 - On the receiver side, ensure the `poll()` method is called regularly during execution of your program, or better, run it in a dedicated thread/task (e.g. FreeRTOS task on ESP32) to keep your main loop clean.
 - Keep processing loops short inside callbacks to avoid the sender waiting for a response. If you need to perform long operations, consider using an asynchronous pattern with a second message to indicate the outcome of the operation.
@@ -582,7 +600,52 @@ Here is an example of debug output with the parameters above:
 - If you see errors like `ERR_BUSY_RECEIVING`, it means a partial frame capture is ongoing. Wait or poll more frequently to allow the library to finish capturing the current frame.
 - For debugging, enabling `EZLINK_DEBUG` can help identify framing or registration issues quickly.
 
+### Memory & Alignment Considerations
+
+- **Alignment**: While the library uses `__attribute__((packed))` to avoid padding, be aware that some architectures (especially certain ARM Cortex-M7) may not handle unaligned 32-bit accesses well:
+  - Works fine on most common MCUs (ESP32, ESP8266, STM32F4, etc.)
+  - If targeting strict alignment architectures, consider using memcpy for 32-bit field access
+
+Here's an example showing how to safely handle 32-bit fields if needed:
+
+```cpp
+// Message definition (always packed for protocol consistency)
+struct SensorDataMsg {
+    static constexpr MsgType type = MsgType::MESSAGE;
+    static constexpr uint8_t id = 1;
+    uint8_t sensorId;      // offset 0
+    uint32_t timestamp;    // offset 1 (unaligned!)
+    float value;          // offset 5 (unaligned!)
+} __attribute__((packed));
+
+// Safe access pattern for strict architectures
+void processSensorData(const SensorDataMsg& msg) {
+    // Direct access to 8-bit fields is always safe
+    uint8_t sensor = msg.sensorId;  
+    
+    // For 32-bit fields, use memcpy if needed
+    uint32_t timestamp;
+    float value;
+    memcpy(&timestamp, &msg.timestamp, sizeof(uint32_t));
+    memcpy(&value, &msg.value, sizeof(float));
+    
+    // Now use timestamp and value safely...
+}
+```
+
 ## Testing & Validation
+
+### Testing Coverage
+
+The test suite demonstrates robustness against various edge cases:
+- CRC errors and frame corruption
+- Truncated frames and partial reception
+- Message collisions and timing issues
+- Buffer overflows and memory constraints
+- Multi-task compatibility (ESP32/FreeRTOS examples)
+- Response timeout handling
+
+On RTOS systems (like ESP32), the test framework shows proper operation across multiple tasks while maintaining frame integrity and proper request/response matching.
 
 ### Native Unit Tests
 Under `test/test_native`, there are `UNITY`-based tests that run on a desktop environment with a mock of `Arduino.h`. These tests cover:
