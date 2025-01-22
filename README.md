@@ -456,6 +456,10 @@ If you want purely asynchronous behavior:
 
 ### Buffer Management & Large Frames
 - By default, `MAX_FRAME_SIZE` is set to `32`. This limits the maximum payload. You can adjust it in `EZLinkDfs` if needed.  
+- Important: When modifying `MAX_FRAME_SIZE`, ensure that:
+  1. All nodes (master & slaves) use the same value to maintain protocol compatibility
+  2. Your messages respect the size limit via compile-time checks (`static_assert`)
+  3. Consider RAM usage impact as the ScrollBuffer size scales with MAX_FRAME_SIZE
 - The "scroll buffer" approach implemented in the library ensures partial frames or garbage are eventually discarded without losing any valid subsequent frames. 
 - Several error cases have been thought of and handled, such as truncated frame, invalid length, invalid SOF, SOF present in data, etc. See unit tests for more details.
 - TLDR: as long as you continuously call `poll()` on the receiver side, the message processing pipeline will jump from one frame to the next and end up synchronizing with the next valid frame even if there's garbage in-between.
@@ -564,6 +568,22 @@ Here is an example of debug output with the parameters above:
 [DBG_SLAVE] TX frame (10B) SOF=0xAA LEN=10 ID=0x81 => AA 0A 81 01 00 00 00 00 EE 34 
 ```
 
+### Code Organization & Header-Only Design
+
+The library follows a header-only approach where most code is contained in the headers:
+
+#### Advantages:
+- Easy to include in projects (no separate .cpp files needed)
+- Simple dependency management
+- Direct compiler optimization possibilities
+
+#### Considerations:
+- Template usage is moderate to avoid code bloat while offering an intuitive API with strong typing.
+- Most logic is factored into non-template code
+- Compilation units generate minimal duplicate code
+
+This design choice balances ease of use with resource efficiency, making it particularly suitable for embedded projects.
+
 ## Practical Considerations & Best Practices
 
 - **Always** register the same prototypes on both ends: matching types, IDs, and data structures. Make sure to use a common `Prototypes.h` (or similar) file.
@@ -576,7 +596,30 @@ Here is an example of debug output with the parameters above:
 - If you see errors like `ERR_BUSY_RECEIVING`, it means a partial frame capture is ongoing. Wait or poll more frequently to allow the library to finish capturing the current frame.
 - For debugging, enabling `EZLINK_DEBUG` can help identify framing or registration issues quickly.
 
+### Memory & Alignment Considerations
+
+- **Alignment**: While the library uses `__attribute__((packed))` to avoid padding, be aware that some architectures (especially certain ARM Cortex-M7) may not handle unaligned 32-bit accesses well:
+  - Works fine on most common MCUs (ESP32, ESP8266, STM32F4, etc.)
+  - If targeting strict alignment architectures, consider using memcpy for 32-bit field access
+  
+- **Handler Design**: The library uses pure C-style function pointers internally:
+  - **Pro**: Minimal overhead, predictable code size, no std::function
+  - **Con**: Cannot capture instance variables in handlers
+  - Generally appropriate for embedded protocols where one typically needs one global handler per message type
+
 ## Testing & Validation
+
+### Testing Coverage
+
+The test suite demonstrates robustness against various edge cases:
+- CRC errors and frame corruption
+- Truncated frames and partial reception
+- Message collisions and timing issues
+- Buffer overflows and memory constraints
+- Multi-task compatibility (ESP32/FreeRTOS examples)
+- Response timeout handling
+
+On RTOS systems (like ESP32), the test framework shows proper operation across multiple tasks while maintaining frame integrity and proper request/response matching.
 
 ### Native Unit Tests
 Under `test/test_native`, there are `UNITY`-based tests that run on a desktop environment with a mock of `Arduino.h`. These tests cover:
