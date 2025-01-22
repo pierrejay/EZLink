@@ -204,7 +204,7 @@ struct Stats {
     }
 } txRxStats;
 
-// Handler functions avec typage fort
+// Handler functions with strong typing
 void onSetLedMsg(const SetLedMsg& msg) {
     logf("SLAVE: Received LED message, state=%d", msg.state);
     txRxStats.messagesReceived++;
