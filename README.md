@@ -327,7 +327,9 @@ Each message type has specific registration requirements:
 ### 5. Defining Callbacks & Handlers
 After registering your messages and responses, you can attach callbacks that will trigger an action upon reception of a message or request (for example in the `setup()` function if you're using the Arduino framework).
 
-Internally, the library uses C-style function pointers for maximum efficiency. Handlers are registered with a strong-typed façade avoiding the need to cast the data at all, making the usage safer and more intuitive:
+Internally, the library uses C-style function pointers for maximum efficiency. Handlers are registered with a strong-typed façade avoiding the need to cast the data at all, making the usage safer and more intuitive. 
+
+N.B.: The registration is limited to one handler per message prototype. If you register another handler for the same message struct, it will replace the previous one.
 
 - **For `MESSAGE` or `MESSAGE_ACK`**:  
   ```cpp
@@ -355,7 +357,8 @@ Internally, the library uses C-style function pointers for maximum efficiency. H
   comm.onRequest<GetStatusMsg>(handleStatusRequest);
   ```
 
-Callbacks will be automatically called by the library when a matching message is received.
+Callbacks will be automatically called by the library when a matching message is received. 
+
 
 ### 6. Sending & Receiving Messages
 
@@ -589,6 +592,7 @@ This design choice balances ease of use with resource efficiency, making it part
 - **Always** register the same prototypes on both ends: matching types, IDs, and data structures. Make sure to use a common `Prototypes.h` (or similar) file.
 - **Never** forget to use the `__attribute__((packed))` keyword on your message structs to avoid padding issues.
 - In your `Prototypes.h` file, for `REQUEST/RESPONSE` pairs, ensure the Response struct is declared before the Request struct or use a forward declaration for the Response struct. Otherwise the compiler might throw an error, as when it's parsing the Request struct, he yet doesn't know the `ResponseType` declared inside.
+- The library accepts a single handler per message prototype. If you register another handler for the same message struct, it will replace the previous one.
 - **Synchronous** patterns (like `sendMsgAck` or `sendRequest`) block until a response arrives or times out. In a busy system, call them from a context where blocking the current thread is acceptable.  
 - On the receiver side, ensure the `poll()` method is called regularly during execution of your program, or better, run it in a dedicated thread/task (e.g. FreeRTOS task on ESP32) to keep your main loop clean.
 - Keep processing loops short inside callbacks to avoid the sender waiting for a response. If you need to perform long operations, consider using an asynchronous pattern with a second message to indicate the outcome of the operation.
@@ -601,11 +605,33 @@ This design choice balances ease of use with resource efficiency, making it part
 - **Alignment**: While the library uses `__attribute__((packed))` to avoid padding, be aware that some architectures (especially certain ARM Cortex-M7) may not handle unaligned 32-bit accesses well:
   - Works fine on most common MCUs (ESP32, ESP8266, STM32F4, etc.)
   - If targeting strict alignment architectures, consider using memcpy for 32-bit field access
-  
-- **Handler Design**: The library uses pure C-style function pointers internally:
-  - **Pro**: Minimal overhead, predictable code size, no std::function
-  - **Con**: Cannot capture instance variables in handlers
-  - Generally appropriate for embedded protocols where one typically needs one global handler per message type
+
+Here's an example showing how to safely handle 32-bit fields if needed:
+
+```cpp
+// Message definition (always packed for protocol consistency)
+struct SensorDataMsg {
+    static constexpr MsgType type = MsgType::MESSAGE;
+    static constexpr uint8_t id = 1;
+    uint8_t sensorId;      // offset 0
+    uint32_t timestamp;    // offset 1 (unaligned!)
+    float value;          // offset 5 (unaligned!)
+} __attribute__((packed));
+
+// Safe access pattern for strict architectures
+void processSensorData(const SensorDataMsg& msg) {
+    // Direct access to 8-bit fields is always safe
+    uint8_t sensor = msg.sensorId;  
+    
+    // For 32-bit fields, use memcpy if needed
+    uint32_t timestamp;
+    float value;
+    memcpy(&timestamp, &msg.timestamp, sizeof(uint32_t));
+    memcpy(&value, &msg.value, sizeof(float));
+    
+    // Now use timestamp and value safely...
+}
+```
 
 ## Testing & Validation
 
