@@ -471,7 +471,7 @@ public:
 
             // Find the proto and validate size
             ProtoStore* proto;
-            Result protoCheck = checkProto(result.id, frameLen - EZLinkDfs::FRAME_OVERHEAD, &proto);
+            Result protoCheck = checkProto(result.id, frameLen - EZLinkDfs::FRAME_OVERHEAD, &proto, true);
             if(protoCheck != SUCCESS) {
                 return protoCheck;
             }
