@@ -1,687 +1,603 @@
 # EZLink Documentation
 
-> *Lightweight, robust & user-friendly messaging library for secure structured communication between microcontrollers*
-
-## Table of Contents
+A lightweight, robust, and user-friendly messaging library for secure, structured communication between microcontrollers.
 
 - [Introduction](#introduction)
-- [EZLink Minimal Example](#ezlink-minimal-example)
-- [Design Goals & Motivations](#design-goals--motivations)
-- [Key Features](#key-features)
 - [Quick Start Guide](#quick-start-guide)
-- [Architecture & Design Overview](#architecture--design-overview)
-- [Practical Considerations & Best Practices](#practical-considerations--best-practices)
-- [Testing & Validation](#testing--validation)
-- [Examples](#examples)
-- [License](#license)
-- [Final Notes](#final-notes)
+- [Advanced usage & configuration](#advanced-usage--configuration)
+  - [Usage with RTOS (single/multi-threading)](#usage-with-rtos-singlemulti-threading)
+  - [Thread safety](#thread-safety)
+  - [Poll timeout parameter](#poll-timeout-parameter)
+  - [Empty messages](#empty-messages)
+  - [Runtime configuration](#runtime-configuration)
+  - [Build-time configuration](#build-time-configuration)
+  - [Error recovery](#error-recovery)
+  - [Debug logging](#debug-logging)
+  - [Handler context (`void* ctx` parameter in message & request handlers)](#handler-context-void-ctx-parameter-in-message--request-handlers)
+  - [Common pitfalls](#common-pitfalls)
+- [The HAL Architecture](#the-hal-architecture)
+- [Error Handling](#error-handling)
+- [Design Rationale for EZLink](#design-rationale-for-ezlink)
 
 ## Introduction
 
-**EZLink** is a C++ library designed for **robust & low-overhead communication** between microcontrollers (typically via UART, but suitable to any transport layer carrying binary data). Its primary goal is to simplifythe process of exchanging structured binary frames, without requiring you to define your own protocol from scratch or adopt complex serialization frameworks.
+**EZLink** is a header-only C++17 library designed to simplify binary communication between microcontrollers (e.g., via UART, CAN, SPI...). Its core principle is simple: you define your messages as plain C++ `struct`s, and EZLink handles the rest: framing, serialization, validation, and routing to the correct callback to trigger actions in your code when messages/requests are received.
 
-The library is built around message structs that serve as message prototypes. You simply declare these structs in a declarative way using native C++ types, and the library handles all the framing, encoding, decoding and validation automatically. Think of it as a very lightweight alternative to Protobuf, combined with a robust transport layer that handles message framing and validation. All of this using simple C++ structs that double as both message definitions and instances, making the protocol self-documenting and easy to maintain.
+The latest version is built on a **Hardware Abstraction Layer (HAL)**, making the core logic completely transport-agnostic. You provide a HAL implementation that tells EZLink how to send and receive raw data frames, and the library takes care of the high-level protocol. The library ships with two reference HALs for UART (Arduino `Serial`) and CANbus (ESP32).
 
-Key design points:
-- Minimal Flash/RAM footprint (~1KB code size + ~250B/message): suitable for the most constrained microcontrollers such as `STM32F03x` series.
-- Simple API with a strong focus on reliability and explicit error reporting. 
-- User-friendly, declarative approach to define message prototypes. 
-- Built-in support for **messages** (one-way), **acknowledged messages**, and **request/response** flows.  
-- Extendable with your own structured types (PODs).  
-- **No** code generation toolchain required (unlike Protobuf/Cap’nProto).  
-- Works seamlessly on **Arduino** platforms or via custom TX/RX callbacks on bare-metal/RTOS-based firmware as long as your target supports C++11.
+### Key Features
 
-Whether you are building a Master/Slave setup over UART or need robust bidirectional communications, **EZLink** aims to keep things **KISS** (Keep It Simple, Stupid) while maximizing runtime safety (CRC checks, well-defined message boundaries, error codes, etc.).
-
-## EZLink Minimal Example
-
-### Shared Message Definition (Prototypes.h)
-```cpp
-#include "EZLink.h"
-using MsgType = EZLink::MsgType;
-
-// Simple control message with acknowledgment
-struct ControlMsg {
-    static constexpr MsgType type = MsgType::MESSAGE_ACK;
-    static constexpr uint8_t id = 1;
-    uint8_t channel;     // Which channel to control
-    uint16_t value;      // Control value
-    uint8_t flags;       // Control flags
-} __attribute__((packed));
-```
-
-### Master Code
-```cpp
-#include "EZLink.h"
-#include "Prototypes.h"
-
-EZLink master(&UART);
-
-void setup() {
-    UART.begin(115200);
-    master.begin();
-    master.registerRequest<ControlMsg>();
-}
-
-void loop() {
-    // Send control message
-    ControlMsg msg{
-        .channel = 1,
-        .value = 1000,
-        .flags = 0x01
-    };
-    auto result = master.sendMsgAck(msg);
-    if (result != EZLink::SUCCESS) {
-        // handle error
-    }
-    delay(1000);
-}
-```
-
-### Slave Code
-```cpp
-#include "EZLink.h"
-#include "Prototypes.h"
-
-EZLink slave(&UART);
-
-// Function to process control messages
-void onControlMsg(const ControlMsg& msg) {
-    processControl(msg.channel, msg.value, msg.flags); // Process received message (business logic)
-}
-
-void setup() {
-    UART.begin(115200);
-    slave.begin();
-    
-    // Register message and handler
-    slave.registerRequest<ControlMsg>();
-    slave.onReceive<ControlMsg>(processControl);
-    // Acknowledgment is automatically sent back to the master after processing
-}
-
-void loop() {
-    // Process incoming messages
-    slave.poll();
-}
-```
-
-That's it! A complete bidirectional communication system in ~50 lines of code.
-
-## Design Goals & Motivations
-
-### Origin & Context
-- **Primary Use Case**: Secure, structured, but resource-constrained communication between an ESP32 and an STM32 over UART, with the latter having only 16 KB of Flash.  
-- **Requirement**: A robust framing and validation system that does not blow up code size or add heavy toolchain dependencies.  
-
-### Why Not Protobuf, SerialCommands, or TinyFrame?
-- **Protobuf**: Great for structured data but generally overkill for small microcontrollers due to runtime overhead, code size, and compiler plugin complexities.  
-- **SerialCommands**: Simple, but often text-based or lacks robust binary framing (no built-in CRC or typed messages).  
-- **TinyFrame**: A similar concept, but still can be less direct if you want strongly typed C++ messages and integrated request/response patterns.
-
-**EZLink** stands out by allowing you to:
-- Declare message structures in pure C++ with minimal boilerplate.  
-- Rely on compile-time checks (via templates & `static_assert`s) for correctness.  
-- Have built-in request/response, acknowledgment flows, and detailed error codes.  
-- Keep code size minimal.
-
-## Key Features
-
-1. **Simplicity**:  
-   - Minimal user API (just register your prototypes, send, receive, done).  
-   - No manual parsing logic; a message is always read/written as a strongly typed C++ struct.
-
-2. **Lightweight & fast**:  
-   - Fits into tight STM32 flash constraints (on the order of 2KB compiled w/ 4 message structs).
-   - Ultra-low latency communications.
-
-3. **Full Safety by Default**:  
-   - CRC16 for integrity checking on all frames.  
-   - Acknowledgment or request/response flows if you want guaranteed delivery.  
-   - Automatic error detection and cleanup on malformed frames.
-
-4. **Flexible Usage**:  
-   - **Synchronous** approach by default (for acknowledgment or request/response).  
-   - **Asynchronous** usage based on unidirectional messages for non-blocking communications (see the appropriate section for details).
-
-5. **Transport Agnostic**:  
-   - Built-in support for **Arduino `HardwareSerial`**.  
-   - Alternative approach: provide your own TX/RX callbacks (interrupt, DMA, RTOS queues, etc.).  
+*   **Simple by design**: Define message protocols using clean, self-documenting C++ `struct`s.
+*   **Transport-agnostic**: Works with any transport layer (UART, CAN, I2C, SPI, RTOS queues) by implementing a simple HAL interface.
+*   **Extremely lightweight**: Minimal Flash and RAM footprint (usually <2KB), suitable for highly constrained MCUs.
+*   **Robust by default**: Relies on templates to provide (almost) fully compile-time safety. The provided UART HAL includes framing and CRC checks for data integrity on every frame.
+*   **Flexible communication patterns**: Natively supports one-way messages (`MESSAGE`) and blocking request/response flows (`REQUEST`/`RESPONSE`).
+*   **RTOS-Ready**: Features an explicit threading model for safe & CPU-efficient use in multi-threaded environments like FreeRTOS.
+*   **Zero dependencies**: No external tools or code generation required like Protobuf-based messaging frameworks. Only requires C++17 or up.
 
 ## Quick Start Guide
 
-### Directory Structure
-A minimal project layout example is shown below:
+Let's build a complete bidirectional communication system between two devices in five simple steps.
 
-```
-├── lib/ 
-│ └── EZLink/                 <- Library files
-│     └── src/
-│         ├── ScrollBuffer.h
-│         └── EZLink.h 
-├── src/ 
-│   └── main.cpp              <- Your application code
-└── include/ 
-    └── Prototypes.h          <- Your message prototypes 
-                                (shared between all targets)
-```
+### Step 1: Define Your Messages (`Prototypes.h`)
 
-### 1. Installation
-- **Arduino/PlatformIO**: Copy or clone the `lib/EZLink/` folder into your project’s `lib/`.  
-- **Bare-metal**: Include the `.h` files in your build system. Ensure you compile `EZLink.h` and `ScrollBuffer.h`.
-
-### 2. Declaring Message Prototypes (Protos)
-
-This can be done directly in your source code, but the best practice is to do this in a separate header file that is shared between all targets. This will ensure that your message definitions are consistent across emitters and receivers.
-
-#### Message Types
-- **`MESSAGE`** : A one-way message. No confirmation is expected.  
-- **`MESSAGE_ACK`** : A one-way message where the receiver automatically **echoes** the same message back (flipping ID bit 7).  
-- **`REQUEST`** : A message that requires a specific typed **`RESPONSE`**.  
-- **`RESPONSE`** : A message that answers a specific `REQUEST`.
-
-#### Naming & ID Rules
-- Each proto struct declares:  
-  - Message type: `static constexpr MsgType type;` (see above)
-  - Message ID: `static constexpr uint8_t id;` (must be in **1..127**).  
-
-- Basic rules:
-  - `id=0` is invalid.  
-  - When you define a `RESPONSE`, it **must** have the same `id` as its request. The library handles linking them together.
-
-- Under the hood:
-  - The library automatically uses `id | 0x80` for responses (IDs 128..255). 
-  - It automatically links requests and responses together.
-  - It can recognize the type of message as well as the request/response relationship.
-  - It reject frames with unrecognized IDs, inconsistent request/response types, as well as responses that don't match any request.
-
-Basically, each message received is sure to be of the type expected by its listener (message/request when polling, ACK/response after sending a request).
-
-#### Example Proto Declarations
+Create a shared header file for all your message prototypes. This ensures both devices speak the same language. In order to avoid memory-related issues for serialization & parsing, always discard padding by using `__attribute__((packed))`.
 
 ```cpp
-#include "EZLink.h"
+/* @file Prototypes.h */
+#pragma once
+#include <EZLink.hpp>
 
-using MsgType = EZLink::MsgType;
+using MsgType = ezlink::MsgType;
 
-// Motor control message (one-way command)
-struct SetMotorMsg {
-    static constexpr MsgType type = MsgType::MESSAGE;
+// A simple one-way command to set brightness/color of an RGB LED (no response expected)
+
+struct SetLedMsg {
+    // Mandatory EZLink metadata
+    static constexpr MsgType type = ezlink::MESSAGE;
     static constexpr uint8_t id = 1;
-    uint8_t motor_id;      // Which motor (1-4)
-    int16_t speed;         // -1000 to +1000
-    uint8_t acceleration;  // 0-255
-    uint8_t mode;         // 0=normal, 1=smooth, 2=precise
+    // Your message schema below
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+    /* ... more fields ... */
 } __attribute__((packed));
 
-// PID configuration (requires acknowledgment)
-struct ConfigPidMsg {
-    static constexpr MsgType type = MsgType::MESSAGE_ACK;
-    static constexpr uint8_t id = 2;
-    uint8_t channel;    // Which control loop
-    float kp;          // Proportional gain
-    float ki;          // Integral gain
-    float kd;          // Derivative gain
+
+// A request/response pair for fetching sensor data
+
+// 1. First, define the RESPONSE struct - same layout as `MESSAGE`
+struct SensorDataResp {
+    static constexpr MsgType type = ezlink::RESPONSE;
+    static constexpr uint8_t id = 2;      // <- Must match the request ID (see below)
+    float temperature;
+    float humidity;
 } __attribute__((packed));
 
-// Sensor data response
-struct SensorDataResponse {
-    static constexpr MsgType type = MsgType::RESPONSE;
-    static constexpr uint8_t id = 3;
-    int16_t temperature;   // Celsius x100 (-4000 to +15000)
-    uint16_t humidity;     // RH x100 (0 to 10000)
-    uint32_t pressure;     // Pascal
-    uint8_t status;       // Bit flags for sensor status
-} __attribute__((packed));
-
-// Request sensor data
-struct GetSensorDataMsg {
-    static constexpr MsgType type = MsgType::REQUEST;
-    static constexpr uint8_t id = 3;
-    uint8_t sensorId;      // Target sensor ID
-    using ResponseType = SensorDataResponse;
+// 2. Then, define the REQUEST that expects the response - both `id` must match
+struct GetSensorDataReq {
+    static constexpr MsgType type = ezlink::REQUEST;
+    static constexpr uint8_t id = 2;     // <- Unique ID for a request/response pair
+    uint8_t sensor_id;
+    using ResponseType = SensorDataResp; // <- Link the response type
 } __attribute__((packed));
 ```
 
-### 3. Initialization
+The `RESPONSE` struct must be declared before the `REQUEST` struct (or use a forward declaration). Otherwise, the compiler won't know `SensorDataResp` when parsing the request's `ResponseType`.
 
-#### Arduino Usage
-Instantiate the `EZLink` object with a reference to the `HardwareSerial` port you want to use for communication.
-```cpp
-// Basic initialization
-EZLink comm(&Serial1);
+The `id` field is up to you, but :
+- It must be unique for each simple message type or request/response pair.
+- The value can be **anything between `0x01 (1)` and `0x7F (127)`** (the maximum number of prototypes itself is capped by the `MAX_PROTOS` setting - default is 16).
+- A response's `id` must match its request's `id`, think of it as an op code rather than a unique identifier.
 
-// With custom response timeout (default: 500ms)
-EZLink comm(&Serial1);
-comm.setResponseTimeout(1000);  // Set to 1 second
+### Step 2: Setup HAL & Link instances
 
-#ifdef EZLINK_DEBUG
-// With debug output
-EZLink comm(&Serial1,      // Communication serial port
-            &Serial,       // Debug serial port
-            "DBG_MASTER"); // Optional prefix for debug messages
-#endif
-```
+- The `ezlink::Link` class is the core component that manages sending/receiving messages, parsing/serializing/validating data & calling your handlers, regardless of the underlying transport layer or hardware peripherals. It must be instantiated with a HAL instance.
 
-#### Custom Transport Usage
-For non-Arduino environments, provide your own TX/RX callbacks, with the following signatures:
-- `std::function<size_t(const uint8_t*, size_t)>` for TX
-- `std::function<size_t(uint8_t*, size_t)>` for RX
+- The HAL is the bridge between EZLink and your hardware. Two reference HAL are included with EZLink:
+    - `EZLinkHAL-UART_Arduino.hpp` provides `ezlink::hal::UART` for UART communication using the Arduino framework.
+    - `EZLinkHAL-CAN_ESP32.hpp` provides `ezlink::hal::CAN_ESP32` for CANbus communication with an ESP32, relying on the `ESP32-TWAI-CAN` library (wrapper around native ESP-IDF `TWAI` driver).
+
+In your `main.cpp` file (or other source file where you intend to use EZLink), create the objects and initialize the HAL if required:
 
 ```cpp
-// Define callbacks
-EZLink::TxCallback txCb = [](const uint8_t* data, size_t len) {
-    return yourCustomUartWrite(data, len);
-};
-EZLink::RxCallback rxCb = [](uint8_t* data, size_t maxLen) {
-    return yourCustomUartRead(data, maxLen);
-};
+#include "hal/EZLinkHAL-UART_Arduino.hpp"
+#include "EZLink.hpp"
+#include "Prototypes.h"
 
-// Basic initialization
-EZLink comm(txCb, rxCb);
-// Custom response timeout can also be set
-// Debug is also available but it outputs to a Stream which needs to be implemented
+// Create an HAL instance
+ezlink::hal::UART uartHAL(&Serial1); // Here we use Serial1 for communication
+
+// Create a Link instance with the HAL object
+ezlink::Link link(uartHAL);
+
+void setup() {
+    Serial.begin(115200);  // For debug printing
+    Serial1.begin(115200); // For EZLink communication
+
+    // Initialize the HAL (if required)
+    uartHAL.begin();
+
+    // Link doesn't need to be initialized, all checks are done during compilation.
+
+    /* ...registration in the next step... */
+}
 ```
 
-Make sure to call `begin()` after construction, for example in the `setup()` function if you're using the Arduino framework:
+### Step 3: Define your message handlers (slave/receiver side)
+
+Handlers are the functions that will be called automatically by EZLink when a valid message or request is received. They directly manipulate the messages you defined in `Prototypes.h` as plain structs: no cast is needed here - when a handler is called, you can be 100% sure that the message is of the expected type.
+
+There are two different signatures for `MESSAGE` and `REQUEST` handlers, since for `REQUEST`, we not only perform an action but also return a response to the peer.
+
+```cpp
+// MESSAGE handler - apply RGB values to the LED
+static void handleSetLed(const SetLedMsg& msg, void* ctx) {
+    analogWrite(LED_R_PIN, msg.red);
+    analogWrite(LED_G_PIN, msg.green);
+    analogWrite(LED_B_PIN, msg.blue);
+    Serial.printf("Set LED to R=%d G=%d B=%d\n", 
+        msg.red, msg.green, msg.blue);
+}
+
+// REQUEST handler - read sensor data and put it in the response object
+static void handleGetSensorData(const GetSensorDataReq& req, SensorDataResp& resp, void* ctx) {
+    // Populate the response object with data
+    resp.temperature = readTempSensor(req.sensor_id);
+    resp.humidity = readHumiditySensor(req.sensor_id);
+    Serial.printf("Data request for sensor %d: T=%.2f, RH=%.2f\n", 
+        req.sensor_id, resp.temperature, resp.humidity);
+    // EZLink will automatically send the `resp` object to the peer
+    // when this handler returns
+}
+```
+
+**Notes:** 
+- All handlers must have a `void* ctx` parameter even if not used. It is necessary for advanced usage where a resource (variable, function...) accessed inside the handler is not available from the handler function itself e.g. when it's not declared globally. It's explained more in detail later in this documentation.
+- Your handlers must stay as quick as possible and not block to avoid delaying EZLink operations. Design them like an ISR and if required, offload the work to a separate routine. Consequently, **NEVER** call `sendRequest()` or `sendMsg()` from your message handlers!
+
+### Step 4: Register Prototypes and Handlers
+
+Then, in your `setup()` function or init section of your `main()`, register the prototypes and handlers with the link:
+
 ```cpp
 void setup() {
-    Serial1.begin(115200);  // Initialize hardware first
-    comm.begin();           // Then call begin()
-}
-```
-This method is here only to clear the RX buffer since garbage can be present right after UART initialization. Consider adding a small delay before calling `begin()` if you're still catching garbage. Anyway, it shouldn't cause issues:
-- In emitter mode, the RX buffer will be cleaned up upon the next message sent.
-- In receiver mode, the first call to `poll()` might throw an `ERR_RCV_INVALID_SOF` error, but it will be automatically recovered on the next legit bytes received.
+    /* ...other init code... */
 
-### 4. Registering Message Prototypes
-For the communication to work properly, you must:
-1. Register all messages you want to send with `registerRequest<T>()`
-2. Register all responses you expect to receive with `registerResponse<T>()`
+    // Register the message and request/response pair - on both devices
+    link.registerMessage<SetLedMsg>();
+    link.registerRequest<GetSensorDataReq>();
+    link.registerResponse<SensorDataResp>();
 
-This must be done after instantiating the `EZLink` object.
+    // Register the handlers - only on the slave/receiver side
+    link.onMessage<SetLedMsg>(handleSetLed);
+    link.onRequest<GetSensorDataReq>(handleGetSensorData);
 
-#### Order of Registration
-The order of registration matters:
-```cpp
-// Correct order:
-comm.registerRequest<GetStatusMsg>();       // Register the request first
-comm.registerResponse<StatusResponseMsg>(); // Then its response
-
-// Incorrect - will return ERR_REG_INVALID_ID:
-comm.registerResponse<StatusResponseMsg>(); // Can't register response first
-comm.registerRequest<GetStatusMsg>();       // Request must be registered before
-```
-
-#### Registration Requirements by Message Type
-Each message type has specific registration requirements:
-
-| Message Type  | Register With       | Notes                                   |
-|--------------|---------------------|----------------------------------------|
-| MESSAGE      | registerRequest     | One-way messages                       |
-| MESSAGE_ACK  | registerRequest     | Messages expecting echo                |
-| REQUEST      | registerRequest     | Messages expecting specific response   |
-| RESPONSE     | registerResponse    | Must register after its request        |
-
-
-### 5. Defining Callbacks & Handlers
-After registering your messages and responses, you can attach callbacks that will trigger an action upon reception of a message or request (for example in the `setup()` function if you're using the Arduino framework).
-
-Internally, the library uses C-style function pointers for maximum efficiency. Handlers are registered with a strong-typed façade avoiding the need to cast the data at all, making the usage safer and more intuitive. 
-
-N.B.: The registration is limited to one handler per message prototype. If you register another handler for the same message struct, it will replace the previous one.
-
-- **For `MESSAGE` or `MESSAGE_ACK`**:  
-  ```cpp
-  void handleLedMessage(const SetLedMsg& msg) {
-      digitalWrite(LED_BUILTIN, msg.state);                      // Utilize message data
-  }
-  
-  // Register prototype and handler
-  comm.registerRequest<SetLedMsg>();
-  comm.onReceive<SetLedMsg>(handleLedMessage);
-  ```
-
-- **For `REQUEST/RESPONSE` pairs**:  
-  ```cpp
-  void handleStatusRequest(const GetStatusMsg& req, StatusResponseMsg& resp) {
-    resp.uptime = millis();
-    resp.state = getSystemState();
-
-    // Response is sent automatically by the library after the callback returns
-  }
-
-  // Register prototypes and handler
-  comm.registerRequest<GetStatusMsg>();
-  comm.registerResponse<StatusResponseMsg>();
-  comm.onRequest<GetStatusMsg>(handleStatusRequest);
-  ```
-
-Callbacks will be automatically called by the library when a matching message is received. 
-
-
-### 6. Sending & Receiving Messages
-
-#### Sending One-Way Messages (`MESSAGE`)
-```cpp
-SetLedMsg msg{.state = 1};
-auto result = comm.sendMsg(msg);
-if (result != EZLink::SUCCESS) {
-  // handle error
-}
-```
-- No response is expected; `poll()` can still be used to receive inbound messages from the other side if needed.
-
-#### Sending Acknowledged Messages (`MESSAGE_ACK`)
-```cpp
-SetPwmMsg pwmMsg{.pin = 5, 
-                 .freq = 1000};
-auto result = comm.sendMsgAck(pwmMsg); 
-if (result != EZLink::SUCCESS) {
-  // handle error, e.g., ERR_RCV_TIMEOUT
-}
-```
-- Under the hood, the library clears the RX buffer, sends `SetPwmMsg`, and waits for an exact echo (flipped ID).
-- If no echo arrives (or it mismatches the data), you get an error.
-- The approach is deliberately synchronous (i.e. blocking) to guarantee message delivery and avoid issues with sending the same message multiple times.
-- Echo is sent after executing the receiver's `onReceive` callback : when an echo is received, the sender is sure that the receiver is ready to process the next incoming message.
-
-#### Request/Response Exchanges (`REQUEST` & `RESPONSE`)
-```cpp
-GetStatusMsg req;
-StatusResponseMsg resp;
-auto result = comm.sendRequest(req, resp);
-if (result == EZLink::SUCCESS) {
-  // use resp.state, resp.uptime, ...
-}
-else {
-  // error handling
+    /* ...other init code... */
 }
 ```
 
-- Like `MESSAGE_ACK`, it blocks waiting for the correct `RESPONSE`.  
-- On the receiver side:
-```cpp
-  void handleStatusRequest(const GetStatusMsg& req, StatusResponseMsg& resp){ 
-      resp.state = 1;
-      resp.uptime = millis();
-  }
-  comm.onRequest<GetStatusMsg>(handleStatusRequest);
-```
-- Reponse is sent after executing the receiver's `onRequest` callback : when a response is received, the sender is sure that the receiver is ready to process the next incoming request.
+**⚠️ Registration order matters:** For `REQUEST/RESPONSE` pairs, you **must** call `registerRequest<>()` before `registerResponse<>()`. Registering in the wrong order will return `ERR_REG_PROTO_MISMATCH`.
 
+### Step 5: Send Messages/Requests and Poll for Incoming Data
 
-## Architecture & Design Overview
+On the **sending device**, you can now send messages and requests. On the **receiving device**, you must call `link.poll()` continuously in your main loop to process incoming data. If your node is both a sender and a receiver, you will need to do both in the same loop.
 
-### Communication Model
-EZLink implements a simple **frame-based** protocol over a raw byte stream:
-- Each frame starts with a **Start of Frame (SOF) byte** `0xAA`.  
-- Followed by **length**, **message identifier (ID)**, the **payload**, and **CRC16**.  
-```
-Frame Format (total size = PAYLOAD_SIZE + 5 bytes overhead)
-
-+-------+-------+--------+----- - - - - ------+---------+
-|  SOF  |  LEN  |   ID   |      PAYLOAD       |  CRC16  |
-+-------+-------+--------+----- - - - - ------+---------+
-  0xAA     N+5    1-127         N bytes         2 bytes
-
-Notes:
-- Default PAYLOAD: Maximum 27 bytes (MAX_FRAME_SIZE[32] - FRAME_OVERHEAD[5])
-- LEN includes all fields (SOF + LEN + ID + PAYLOAD + CRC16)
-- ID: 1-127 for requests, 128-255 for responses (request_id | 0x80)
-- CRC16: Calculated over all preceding bytes (SOF to end of PAYLOAD)
-```
-
-Internally, the library:
-- Buffers incoming bytes in a small ring buffer (`ScrollBuffer`).  
-- Scans for the next valid SOF.  
-- Verifies length, ID, and CRC to confirm a valid message frame.  
-- Calls the corresponding handler if registered.
-
-### Transport Layer
-- By default ("Arduino mode"), you provide a `HardwareSerial*`. The library will `write()` frames out and `read()` bytes in automatically.  
-- Otherwise, you can supply custom callbacks (`std::function` handlers):
-  - `TxCallback` for TX
-  - `RxCallback` for RX
-- TX/RX callbacks will be called automatically by the library when needed to send and receive bytes to the hardware interface. This allows integration with any hardware driver, buffer, or OS primitives. 
-- This callback-based approach allows EZLink to send and receive even during synchronous operations: even if the main thread is blocked, the library still has access to the hardware interface. 
-- It also reduces memory footprint by avoiding the need for dedicated buffers where the user would push/pull incoming and outgoing data: existing comm buffers are generally sufficient, especially with short message size like the default 32B - but you can still implement your own if needed.
-- The transport layer supports response timeout and transmission errors handling. However, retries are not handled by the library, you need to implement the logic yourself if required.
-
-### Synchronous vs. Asynchronous
-- **Synchronous**: For `MESSAGE_ACK` or `REQUEST/RESPONSE`, EZLink blocks internally waiting for the correct acknowledgment or response. It also cleans the receive buffer to avoid stale data.  
-- **Asynchronous**: For `MESSAGE` type, no response is expected, so the user can simply send and forget.
-
-If you want purely asynchronous behavior:
-- Use only `MESSAGE` types or treat each exchange as unidirectional.  
-- You can call `comm.poll()` periodically or within a specific task/thread to process inbound frames.  
-- For concurrency, note that EZLink is **not** inherently thread-safe. If multiple threads call `sendMsg()` concurrently, you must protect them externally.
-
-### Buffer Management & Large Frames
-- By default, `MAX_FRAME_SIZE` is set to `32`. This limits the maximum payload. You can adjust it in `EZLinkDfs` if needed.  
-- Important: When modifying `MAX_FRAME_SIZE`, ensure that:
-  1. All nodes (master & slaves) use the same value to maintain protocol compatibility
-  2. Your messages respect the size limit via compile-time checks (`static_assert`)
-  3. Consider RAM usage impact as the ScrollBuffer size scales with MAX_FRAME_SIZE
-- The "scroll buffer" approach implemented in the library ensures partial frames or garbage are eventually discarded without losing any valid subsequent frames. 
-- Several error cases have been thought of and handled, such as truncated frame, invalid length, invalid SOF, SOF present in data, etc. See unit tests for more details.
-- TLDR: as long as you continuously call `poll()` on the receiver side, the message processing pipeline will jump from one frame to the next and end up synchronizing with the next valid frame even if there's garbage in-between.
-
-### CRC Validation & Protocol Robustness
-- Every frame includes a 2-byte CRC16.  
-- The library discards frames with invalid CRC, tries to find the next valid SOF in the buffer, and continues.  
-- If you have extremely noisy lines, consider adding re-transmissions or switching to `MESSAGE_ACK` or `REQUEST/RESPONSE` flows for guaranteed data integrity.
-
-### Error Handling & Diagnostics
-
-#### Overview
-EZLink provides detailed error reporting through its `Status` enum and `Result` structure. Each operation returns a `Result` containing both a `status` code and the relevant message `id`.
+#### Example: Sender Code
 
 ```cpp
-struct Result {
-    Status status;  // Status or error code
-    uint8_t id;     // Related message ID (0 if not applicable)
+void loop() {
+    // Create a request & response placeholder
+    // Here, we request a reading on sensor #42
+    GetSensorDataReq req = {.sensor_id = 42};
+    SensorDataResp resp;
+
+    // Send a request and wait for the response
+    auto result = link.sendRequest(req, resp);
+
+    if (result != ezlink::SUCCESS) {
+        Serial.println("Cannot read sensor!");
+    } else {
+        /* Handle success... */
+        Serial.printf("Temperature: %.2f°C, Humidity: %.2f%%\n",
+            resp.temperature, resp.humidity);
+    }
+
+    delay(5000); // Loop every 5 seconds
+}
+```
+
+For one-way messages (no response expected), use `sendMsg()`:
+
+```cpp
+// Send a one-way LED command
+SetLedMsg msg = {.red = 255, .green = 0, .blue = 128};
+
+auto result = link.sendMsg(msg);
+
+if (result != ezlink::SUCCESS) {
+    /* Handle error... */
+} else {
+    /* Handle success... */
+}
+```
+
+#### Example: Receiver Code
+
+```cpp
+void loop() {
+    // Continuously process incoming messages and requests
+    // When a request is received, the handler will be called
+    // and the response will be sent automatically
+    link.poll();
+
+    /* Do other stuff... */
+}
+```
+
+### That's it!
+
+The following sections provide more details on the library, but with the simple examples above, you should have everything you need to start building your application using EZLink.
+
+## Advanced usage & configuration
+
+### Usage with RTOS (single/multi-threading)
+
+If you're using an RTOS like FreeRTOS, you might want to run `poll()` in a **dedicated background task** that does nothing but listen for incoming messages, while sending requests from other application tasks.
+
+In this case, you need to tell EZLink by defining the build flag `EZLINK_RTOS_POLL_TASK` in your `platformio.ini`, `CMakeLists.txt`, or compiler flags:
+
+```ini
+# platformio.ini
+build_flags = -DEZLINK_RTOS_POLL_TASK
+```
+
+**When to use this flag:**
+- You have a dedicated task that calls `poll()` continuously in a loop.
+- You call `sendRequest()` from **a different context** than where `poll()` runs.
+- Your HAL supports RTOS multi-threading (implements `takeSemaphore()` and `giveSemaphore()`).
+
+**Example: Dedicated Poll Task**
+
+```cpp
+ezlink::Link link(canHAL);  // With EZLINK_RTOS_POLL_TASK build flag
+
+// Task 1: Dedicated receiver (high priority)
+void pollTask(void* param) {
+    while(1) {
+        // This task ONLY processes incoming messages
+        link.poll(portMAX_DELAY);
+    }
+}
+
+// Task 2: Application logic (normal priority)
+void appTask(void* param) {
+    while(1) {
+        /* Do application work... */
+
+        // Send a request - this will block until response arrives
+        GetSensorDataReq req = {.sensor_id = 42};
+        SensorDataResp resp;
+        auto result = link.sendRequest(req, resp);
+
+        /* Do other stuff... */
+    }
+}
+
+void setup() {
+    uartHAL.begin();
+
+    /* Register protos and handlers... */
+
+    // Create poll & application tasks
+    xTaskCreate(pollTask, "Poll", 2048, NULL, 5, NULL);
+    xTaskCreate(appTask, "App", 2048, NULL, 3, NULL);
+}
+```
+
+**How it works:** When `sendRequest()` is called from `appTask`, if the flag is set, it sends the request and then waits on a semaphore. The `pollTask` receives the response and signals the semaphore to wake up the waiting task.
+
+**⚠️ Important:** 
+- If you define `EZLINK_RTOS_POLL_TASK` but your HAL doesn't support it, you'll get a clear compilation error with instructions on how to fix it.
+- If you're using a **single context** (loop/task/thread...) for **all EZLink communication** (standard Arduino or a single FreeRTOS task), do **NOT** set this flag!
+- For single receivers OR if you are only sending asynchronous messages (no request/response), this doesn't matter, the flag isn't necessary since there is no concurrency in this case.
+
+### Thread safety
+
+**Important:** EZLink is **not fully thread-safe**. Follow these rules to avoid deadlocks or race conditions:
+
+- **`poll()`**: Only **one thread/task** should explicitly call `poll()` in your entire program.
+- **`sendRequest()`**: **Not thread-safe in all cases** even if your HAL supports concurrent send operations - protect with mutexes if called from multiple threads.
+- **`sendMsg()`**: Depends if your HAL supports concurrent send operations. In doubt, avoid concurrent calls at all.
+- **NEVER** call `sendRequest()` or `sendMsg()` from your message handlers! Beyond potential concurrency issues, this is bad practice: your callbacks must be as quick as possible and not block like explained in the previous section.
+- **Registration methods**: Call only during initialization from a single thread.
+
+```cpp
+// WRONG: Multiple threads calling sendRequest()
+void taskA() { link.sendRequest(reqA, respA); }  // ❌ Race condition
+void taskB() { link.sendRequest(reqB, respB); }  // ❌ Race condition
+
+// RIGHT: Serialize access with mutex
+SemaphoreHandle_t linkMutex = xSemaphoreCreateMutex();
+void taskA() {
+    xSemaphoreTake(linkMutex, portMAX_DELAY);
+    link.sendRequest(reqA, respA);
+    xSemaphoreGive(linkMutex);
+}
+```
+
+**Note to HAL developers:** if your HAL supports RTOS multi-threading, it MUST handle concurrent calls to `sendFrame()` somehow (queue, mutex...), since `Link::poll()` executing in the background task may call `HAL::sendFrame()` to reply to an incoming request, while another thread calls `Link::sendRequest()` in the meantime, which itself will also call `HAL::sendFrame()`.
+
+### Poll timeout parameter
+
+The `poll()` methods allows to pass an `uint32_t timeoutMs` parameter as argument. This is especially useful for efficient CPU usage in RTOS environments. If the HAL supports it (e.g. the included CAN ESP32 HAL), you can choose your own behavior:
+
+- **Busy-wait**: Use `timeout = 0` (or no argument) to return immediately if no data
+- **Blocking with timeout**: Use a specific timeout value (e.g., `200`) to wait up to that many milliseconds
+- **Blocking indefinitely**: Use `portMAX_DELAY` to block until data arrives (FreeRTOS)
+
+```cpp
+link.poll(0);             // Non-blocking: return immediately if no data
+link.poll(200);           // Block up to 200ms waiting for messages
+link.poll(portMAX_DELAY); // Block indefinitely until message arrives (FreeRTOS)
+```
+
+**Implementation note**: The provided **UART Arduino HAL** uses busy-wait polling as it sticks to the basic Arduino Serial API, while the **CAN ESP32 HAL** uses native ESP32 blocking calls through the underlying IDF `TWAI` driver's message queues.
+
+### Empty messages
+
+EZLink supports empty messages (no data fields), which avoids using dummy values when the receiver doesn't expect any data from the sender, such as:
+- Command messages
+- Simple ACKs
+
+Basic example:
+
+```cpp
+struct PingAck {
+    static constexpr MsgType type = RESPONSE;
+    static constexpr uint8_t id = 5;
+    // No data fields!
+} __attribute__((packed));
+
+struct PingReq {
+    static constexpr MsgType type = REQUEST;
+    static constexpr uint8_t id = 5;
+    // No data fields!
+    using ResponseType = PingAck;
+} __attribute__((packed));
+```
+
+### Runtime configuration
+
+You can configure timeouts when creating the `Link`:
+
+```cpp
+ezlink::Link link(
+    hal,   // HAL instance (mandatory)
+    2000,  // responseTimeoutMs: wait 2s for responses
+    500    // txTimeoutMs: wait 500ms for HAL to send data
+);
+```
+
+- **`responseTimeoutMs`**: How long `sendRequest()` waits for a response (defaults to 1000 ms)
+- **`txTimeoutMs`**: How long to wait for HAL TX operations to complete (defaults to 100 ms)
+
+### Build-time configuration
+
+Set those build flags before including EZLink headers or in your `platformio.ini`, `CMakeLists.txt`, etc.:
+
+```cpp
+// EZLink: configure memory usage, debug & threading
+#define EZLINK_MAX_PROTOS 32      // Support up to 32 message types (default: 16)
+#define EZLINK_DEBUG              // Enable debug logging (default: undefined)
+#define EZLINK_RTOS_POLL_TASK     // Enable RTOS dedicated poll task mode (see above)
+
+// UART Arduino HAL: configure message size limits
+#define EZLINK_UART_MAX_FRAME_SIZE 128  // Max frame size (default: 32)
+#define EZLINK_UART_MAX_CHUNK_SIZE 64   // TX chunk size (default: 64)
+
+#include <EZLink.hpp>
+```
+
+### Error recovery
+
+EZLink reports errors but **does not retry automatically**. Error recovery is your responsibility:
+
+```cpp
+auto result = link.sendRequest(req, resp);
+if (result != ezlink::SUCCESS) {
+    if (result == ezlink::ERR_SND_TX_FAILED) {
+        // Decide: retry, fail, or fallback behavior
+        Serial.println("Timeout - retrying...");
+        result = link.sendRequest(req, resp);  // Manual retry
+    }
+    /* Handle other errors... */
+}
+```
+
+### Debug logging
+
+EZLink includes optional debug logging that goes through your HAL's `printLog()` method. To enable it, define `EZLINK_DEBUG` before including the library (or as a build flag in `platformio.ini`, `CMakeLists.txt`, etc.).
+
+When enabled, EZLink outputs diagnostic messages prefixed with `[EZLink]`:
+
+```
+[EZLink] Registered proto: id=1, type=0, size=3
+[EZLink] Received frame: id=1, payloadLen=3
+[EZLink] Message processed: id=1
+[EZLink] Error: Send TX failed, id=2
+```
+
+The HAL is responsible for implementing `printLog()` (usually forwarding to `printf()` or similar).
+
+### Handler context (`void* ctx` parameter in message & request handlers)
+
+EZLink handlers use C-style function pointers for performance and minimal overhead. The `void* ctx` parameter allows you to pass context to handlers, similar to lambda captures. This is essential when your handler needs to access resources that aren't globally available (e.g., class members, local state).
+
+```cpp
+// Example: Access class members from a handler
+class LedController {
+private:
+    int ledPin;
+    int brightness;
+
+    // Handler must be static (no 'this' pointer)
+    static void handleSetLed(const SetLedMsg& msg, void* ctx) {
+        LedController* self = static_cast<LedController*>(ctx);
+        self->brightness = msg.value;
+        analogWrite(self->ledPin, self->brightness);
+    }
+
+public:
+    LedController(int pin) : ledPin(pin), brightness(0) {}
+
+    void registerHandlers(ezlink::Link& link) {
+        // Pass 'this' as context to access class members
+        link.onMessage<SetLedMsg>(handleSetLed, this);
+    }
 };
 ```
 
-The `==` and `!=` operators are overloaded for `Result` so you can easily check the status without having to extract it from the struct.
+### **⚠️ Critical lifetime requirements**
 
-#### Success Codes (0-9)
-| Code | Name | Description | Common Causes | Solution |
-|------|------|-------------|---------------|----------|
-| 0 | `SUCCESS` | Operation completed successfully | N/A | N/A |
-| 1 | `NOTHING_TO_DO` | No data to process | Empty RX buffer, no messages to handle | Normal condition during polling |
+**Both handler functions & context pointers** must remain valid for the entire `Link` lifetime (a.k.a. forever) once they are registered! Use `static` or global functions if they are registered within their own scope, otherwise you will get a hard fault as soon as they are called.
 
-#### Registration Errors (10-19)
-| Code | Name | Description | Common Causes | Solution |
-|------|------|-------------|---------------|----------|
-| 10 | `ERR_ID_ALREADY_REGISTERED` | Message ID already in use | Duplicate ID in message definitions | Ensure unique IDs across all messages |
-| 11 | `ERR_TOO_MANY_PROTOS` | Maximum number of prototypes exceeded | Too many registered messages | Increase `MAX_PROTOS` or reduce message types |
-| 12 | `ERR_REG_INVALID_ID` | Invalid message ID used | ID=0 or ID≥128 for requests | Use IDs between 1-127 for requests |
-| 13 | `ERR_REG_PROTO_MISMATCH` | Protocol type mismatch | Wrong message type registration method | Use correct register method for message type |
+### Common pitfalls
 
-#### Communication State Errors (20-29)
-| Code | Name | Description | Common Causes | Solution |
-|------|------|-------------|---------------|----------|
-| 20 | `ERR_BUSY_RECEIVING` | Frame capture in progress | Attempting to send while receiving | Wait and retry, or call cleanupRxBuffer() |
-
-#### Reception Errors (30-39)
-| Code | Name | Description | Common Causes | Solution |
-|------|------|-------------|---------------|----------|
-| 31 | `ERR_RCV_INVALID_ID` | Received unknown message ID | Message not registered, corrupted frame | Register message, check connection |
-| 32 | `ERR_RCV_INVALID_SOF` | Invalid start of frame | Noise, desynchronization | Will auto-recover on next valid frame |
-| 33 | `ERR_RCV_INVALID_LEN` | Invalid frame length | Corrupted frame, noise | Will auto-recover on next valid frame |
-| 34 | `ERR_RCV_PROTO_MISMATCH` | Message type mismatch | Wrong message type received | Check message definitions match |
-| 35 | `ERR_RCV_ACK_MISMATCH` | Wrong acknowledgment | Corrupted response, wrong echo | Check connection, retry if needed |
-| 36 | `ERR_RCV_RESP_MISMATCH` | Wrong response type | Response size mismatch | Check message definitions match |
-| 37 | `ERR_RCV_CRC` | CRC check failed | Corrupted frame, noise | Will auto-recover on next valid frame |
-| 38 | `ERR_RCV_UNEXPECTED_RESPONSE` | Unsolicited response | Late response, protocol error | Check timing, clean buffers |
-| 39 | `ERR_RCV_TIMEOUT` | Response timeout | No response received | Check connection, increase timeout |
-
-#### Transmission Errors (40-49)
-| Code | Name | Description | Common Causes | Solution |
-|------|------|-------------|---------------|----------|
-| 41 | `ERR_SND_INVALID_ID` | Invalid message ID | Message not registered | Register message before sending |
-| 42 | `ERR_SND_EMPTY_DATA` | No data to send | Null pointer, zero length | Check message content |
-| 43 | `ERR_SND_PROTO_MISMATCH` | Protocol type mismatch | Wrong message type for operation | Use correct send method |
-
-#### Hardware Errors (50-59)
-| Code | Name | Description | Common Causes | Solution |
-|------|------|-------------|---------------|----------|
-| 50 | `ERR_HW_FLOOD` | Hardware buffer overflow | Too much incoming data | Check for emitter flooding the RX buffer |
-| 51 | `ERR_HW_TX_FAILED` | TX hardware failure | Buffer full, hardware error | Check hardware, retry |
-
-#### Basic Error Handling Example
 ```cpp
-auto result = comm.sendMsg(msg);
-if (result != EZLink::SUCCESS) {
-    // Handle error
-    handleError(result.status, result.id);
+// WRONG: Non-static member function (can't take address)
+class Foo {
+    void handler(const Msg& msg, void* ctx) { }  // ❌ Won't compile
+};
+
+// WRONG: Lambda with capture (can't convert to function pointer)
+auto handler = [someValue](const Msg& msg, void* ctx) { /* Do stuff... */ };
+link.onMessage<Msg>(handler); // ❌ Won't compile
+
+// WRONG: Context goes out of scope
+void setup() {
+    LedController ctrl(13);  // ❌ Destroyed when setup() exits
+    ctrl.registerHandlers(link);
+}
+
+// RIGHT: Static handler + persistent context
+class LedController {
+    static void handler(const Msg& msg, void* ctx) { }  // ✅ Static function
+};
+
+LedController ctrl(13);  // ✅ Global: valid for program lifetime
+void main() {
+    ctrl.registerHandlers(link);
 }
 ```
 
-### Debug Support
-Enable debug output to get detailed error information with the `EZLINK_DEBUG` flag
+## The HAL Architecture
+
+EZLink clearly separates protocol logic from physical transport.
+
+*   **`ezlink::Link` (the Core)**: Manages message registration, handlers, and the state of request/response transactions. It works only with *payloads* (a `message ID` byte plus your `struct` data).
+*   **The HAL (the Transport)**: Is responsible for everything else. It takes a payload from the core, wraps it in a physical frame (e.g., adding a Start-of-Frame byte, length, and CRC for UART), and transmits it. On reception, it does the reverse, validating the frame and passing the clean payload up to the core.
+
+This design means you can easily adapt EZLink to any communication bus by creating your own HAL class that implements the required methods. A well-documented HAL template is available at `src/hal/EZLinkHAL-Template.hpp` to guide you through implementing a custom HAL:
 
 ```cpp
-#define EZLINK_DEBUG
+class MyCustomHAL {
+public:
+    // Max EZLink message payload size
+    static constexpr size_t MAX_PAYLOAD_SIZE = 64;
 
-EZLink comm(&Serial1,       // Serial port to use for communication
-            &Serial,        // Stream for debug output (Serial=USB on ESP32)
-            "DBG_MASTER");  // Debug tag (prefix to log messages)
+    // Core transport functions
+    int sendFrame(const uint8_t* payload, size_t len, uint32_t timeoutMs);
+    int recvFrame(uint8_t* payload, size_t maxLen, uint32_t timeoutMs);
+
+    // System utility functions
+    uint32_t getTimestampMs() const;
+    void yield();
+
+    // RTOS synchronization (optional - only if supporting EZLINK_RTOS_POLL_TASK)
+    bool takeSemaphore(uint32_t timeoutMs);
+    void giveSemaphore();
+
+    // Debug logging hook
+    void printLog(const char* format, ...);
+};
 ```
 
-The debug output to a `Stream` will provide:
-- Hex dumps of frames with errors
-- Error descriptions and message IDs
-- Frame analysis (SOF, LEN, ID values)
-- State transitions
+## Error Handling
 
-This makes debugging very easy on the Arduino framework, where you can easily attach a custom logger or Serial port to the debug stream.
-
-Here is an example of debug output with the parameters above:
-```
-// On MASTER side
-[DBG_MASTER] RX buffer cleaned
-[DBG_MASTER] TX frame (10B) SOF=0xAA LEN=10 ID=0x01 => AA 0A 01 02 00 00 00 00 D4 C6 
-[DBG_MASTER] RX valid frame (10B) SOF=0xAA LEN=10 ID=0x81 => AA 0A 81 02 00 00 00 00 00 E6 
-
-// On SLAVE side
-[DBG_SLAVE] RX valid frame (10B) SOF=0xAA LEN=10 ID=0x01 => AA 0A 01 01 00 00 00 00 3A 14 
-[DBG_SLAVE] TX frame (10B) SOF=0xAA LEN=10 ID=0x81 => AA 0A 81 01 00 00 00 00 EE 34 
-```
-
-### Code Organization & Header-Only Design
-
-The library follows a header-only approach where most code is contained in the headers:
-
-#### Advantages:
-- Easy to include in projects (no separate .cpp files needed)
-- Simple dependency management
-- Direct compiler optimization possibilities
-
-#### Considerations:
-- Template usage is moderate to avoid code bloat while offering an intuitive API with strong typing.
-- Most logic is factored into non-template code
-- Compilation units generate minimal duplicate code
-
-This design choice balances ease of use with resource efficiency, making it particularly suitable for embedded projects.
-
-## Practical Considerations & Best Practices
-
-- **Always** register the same prototypes on both ends: matching types, IDs, and data structures. Make sure to use a common `Prototypes.h` (or similar) file.
-- **Never** forget to use the `__attribute__((packed))` keyword on your message structs to avoid padding issues.
-- In your `Prototypes.h` file, for `REQUEST/RESPONSE` pairs, ensure the Response struct is declared before the Request struct or use a forward declaration for the Response struct. Otherwise the compiler might throw an error, as when it's parsing the Request struct, he yet doesn't know the `ResponseType` declared inside.
-- The library accepts a single handler per message prototype. If you register another handler for the same message struct, it will replace the previous one.
-- **Synchronous** patterns (like `sendMsgAck` or `sendRequest`) block until a response arrives or times out. In a busy system, call them from a context where blocking the current thread is acceptable.  
-- On the receiver side, ensure the `poll()` method is called regularly during execution of your program, or better, run it in a dedicated thread/task (e.g. FreeRTOS task on ESP32) to keep your main loop clean.
-- Keep processing loops short inside callbacks to avoid the sender waiting for a response. If you need to perform long operations, consider using an asynchronous pattern with a second message to indicate the outcome of the operation.
-- If you need fully async interactions, do not rely on the built-in synchronous request/response calls. Instead, use your own logic with unidirectional messages.
-- If you see errors like `ERR_BUSY_RECEIVING`, it means a partial frame capture is ongoing. Wait or poll more frequently to allow the library to finish capturing the current frame.
-- For debugging, enabling `EZLINK_DEBUG` can help identify framing or registration issues quickly.
-
-### Memory & Alignment Considerations
-
-- **Alignment**: While the library uses `__attribute__((packed))` to avoid padding, be aware that some architectures (especially certain ARM Cortex-M7) may not handle unaligned 32-bit accesses well:
-  - Works fine on most common MCUs (ESP32, ESP8266, STM32F4, etc.)
-  - If targeting strict alignment architectures, consider using memcpy for 32-bit field access
-
-Here's an example showing how to safely handle 32-bit fields if needed:
+All public methods return an `ezlink::Result` struct, which contains a `Status` code and the relevant message `id` if applicable (`NULL_ID = 0` otherwise). You can check for success easily:
 
 ```cpp
-// Message definition (always packed for protocol consistency)
-struct SensorDataMsg {
-    static constexpr MsgType type = MsgType::MESSAGE;
-    static constexpr uint8_t id = 1;
-    uint8_t sensorId;      // offset 0
-    uint32_t timestamp;    // offset 1 (unaligned!)
-    float value;          // offset 5 (unaligned!)
-} __attribute__((packed));
-
-// Safe access pattern for strict architectures
-void processSensorData(const SensorDataMsg& msg) {
-    // Direct access to 8-bit fields is always safe
-    uint8_t sensor = msg.sensorId;  
-    
-    // For 32-bit fields, use memcpy if needed
-    uint32_t timestamp;
-    float value;
-    memcpy(&timestamp, &msg.timestamp, sizeof(uint32_t));
-    memcpy(&value, &msg.value, sizeof(float));
-    
-    // Now use timestamp and value safely...
+MyMsg myMsg{/* Some data... */};
+auto result = link.sendMsg(myMsg);
+if (result != ezlink::SUCCESS) {
+    // Handle error. For debugging, you can print the status in plain text:
+    printf("Operation failed on message ID %d: %s\n", result.id, ezlink::toString(result));
 }
 ```
 
-## Testing & Validation
+The `poll()` method also returns a `Result` that you can check for your own error handling or logging purposes:
 
-### Testing Coverage
-
-The test suite demonstrates robustness against various edge cases:
-- CRC errors and frame corruption
-- Truncated frames and partial reception
-- Message collisions and timing issues
-- Buffer overflows and memory constraints
-- Multi-task compatibility (ESP32/FreeRTOS examples)
-- Response timeout handling
-
-On RTOS systems (like ESP32), the test framework shows proper operation across multiple tasks while maintaining frame integrity and proper request/response matching.
-
-### Native Unit Tests
-Under `test/test_native`, there are `UNITY`-based tests that run on a desktop environment with a mock of `Arduino.h`. These tests cover:
-- Registration edge cases (duplicate ID, etc.).  
-- Sending/receiving frames, partial frames, CRC errors.  
-- Request/response logic and timeouts.  
-
-To run them locally (PlatformIO example):
-```sh
-pio test -e native_test
+```cpp
+auto result = link.poll();
+if (result == ezlink::NODATA) {
+    // No message to process - this is normal, not an error
+} else if (result == ezlink::SUCCESS) {
+    // Message was received and processed successfully
+    // Access the received message ID with result.id
+} else {
+    // RX error occurred (invalid ID, CRC error, etc.)
+}
 ```
 
-### Hardware Integration Tests
-Under `test/test_hardware`, you’ll find tests that run on actual hardware, exchanging messages across real UART lines. This verifies timing, buffering, and physical transport behavior. The tests have been run on an ESP32S3 dev board in a "loopback" setup (2 UART peripherals chained together with RX/TX pins crossed). 
+The `ezlink::Status` enum provides a comprehensive list of potential success and error codes for robust diagnostics.
 
-```sh
-pio test -e hardware_test
-```
+## Design Rationale for EZLink
+
+This library was built to address a common gap in embedded development. When you need to pass structured data, you're often faced with two choices: manually packing bytes with `Serial.write()`, or pulling in a full serialization framework like Protobuf. EZLink is the alternative.
+
+### 1. Low resource consumption
+
+A primary requirement was to keep the footprint minimal for tiny MCUs such as STM32G0.
+
+*   **Flash (code size):** The core logic is header-only. The main cost comes from the HAL implementation. The provided UART HAL, which handles framing and CRC16, adds about **2KB** to the final binary. This is a fixed, predictable cost for getting a robust transport layer.
+
+*   **RAM (memory usage):** All memory is allocated statically. The total usage is determined by:
+    1.  The `MAX_PROTOS` setting (the size of your message registry, defaults to 16 slots).
+    2.  The maximum size of a message frame, fixed in HAL: `MAX_PAYLOAD_SIZE` (64B for UART, 8B for CAN by default)
+    3.  The HAL's internal buffers (e.g., the UART HAL uses an RX buffer of `MAX_FRAME_SIZE * 2`).
+
+For a typical project, the RAM footprint stays **well under 1KB**.
+
+### 2. Built-in protocol reliability
+
+Manually implementing framing, length checks, and checksums is error-prone. EZLink's HALs are meant to solve the burden of implementing these features in user code.
+
+*   **Integrity is handled:** The default UART HAL enforces a simple `SOF | Length | Payload | CRC16` frame structure. The library's parser is designed to find the next valid frame even if there's noise or corrupted data on the line. It discards garbage for you.
+
+*   **Compile-time type safety:** The API relies on C++ templates. This means you work with actual `struct`s, not `void*` pointers and `memcpy`. If you pass the wrong `struct` to a handler or a `send` function, the compiler will fail the build. This catches a whole class of bugs before the code ever runs.
+
+### 3. KISS workflow
+
+The goal is to define and use a communication protocol without leaving your C++ environment. No external scripts, no code generation steps.
+
+This table summarizes the trade-offs:
+
+| Feature | EZLink | "Raw Serial" (`read`/`write`) | Protobuf / nanopb |
+| :--- | :--- | :--- | :--- |
+| **Message Definition**| C++ `struct`s | Manual byte packing/unpacking | `.proto` schema files |
+| **Tooling** | **None required** | None | Requires code generation toolchain |
+| **Framing & Integrity**| **Built-in (HAL)**| Do-It-Yourself | Do-It-Yourself |
+| **Safety**| **High** (comptime safety with templates) | Low (manual, runtime errors) | High (generated code) |
+| **Code Size** | **Tiny** (<2KB) | Minimal (ad-hoc) | Small (2~4KB) |
+
+In short, EZLink is the choice when you need the guarantees of a real messaging framework (framing, validation, typed messages) but want to implement it with minimal dependencies and without adding a code generation step to your build process. With message prototypes defined in a separate header file, it's pretty straightforward to keep track of changes and manage versioning separately from your application code.
 
 ## Examples
 
-### Arduino Examples
-Inside `examples/arduino/`:
-- **`loopback.cpp`**: A simple loopback test on a single device with logging.  
-- **`master.cpp` & `slave.cpp`**: A typical Master/Slave scenario. The master sends `SetLedMsg` or `GetStatusMsg`, and the slave toggles a pin or responds with uptime data.
+Complete working examples based on the Quick Start Guide are available in the `examples/` directory:
+- `Prototypes.h`: Shared message definitions for the master/slave examples
+- `master_main.cpp`: Master device implementation (sends requests, receives responses)
+- `slave_main.cpp`: Slave device implementation (registers handlers, responds to requests)
 
-### ESP-IDF Examples
-Under `examples/esp-idf/`:
-- Illustrates using `EZLink` in a typical ESP-IDF project, with non-Arduino drivers.
-
-## License
-This library is released under the [MIT License](./LICENSE). Feel free to use and modify it to suit your needs.
-
-## Final Notes
-EZLink’s approach is intentionally minimalistic, but it offers enough structure to avoid “reinventing the wheel” each time you need robust UART-based message handling. With compile-time validation, CRC checks, and straightforward message definitions, you can focus on business logic rather than protocol plumbing.
-
-If you encounter issues or have feature requests, please open an issue or PR on the repo! I'll be happy to get feedback and contributions to improve the library.
-
-Happy hacking!
+These examples demonstrate a complete bidirectional communication system and can serve as a starting point for your own projects. Out of simplicity, they are based on the Arduino framework, but you can easily adapt them to other platforms/SDKs since EZLink is platform-agnostic.
