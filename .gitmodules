@@ -1,0 +1,3 @@
+[submodule "external/ESP32-TWAI-CAN"]
+	path = external/ESP32-TWAI-CAN
+	url = https://github.com/handmade0octopus/ESP32-TWAI-CAN.git
